@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from daythread import connectors, crypto
+from daythread import connectors, crypto, oauth, runtime
 from daythread.db import connect, init_db
 from daythread.errors import ValidationError
 
@@ -47,6 +47,49 @@ class GmailOpener:
         ).encode("utf-8")
 
 
+class ActionOpener:
+    def __init__(self, payload=None):
+        self.payload = payload or {"id": "created-1"}
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        return json.dumps(self.payload).encode("utf-8")
+
+
+class MicrosoftCalendarOpener:
+    def __call__(self, request):
+        return json.dumps(
+            {
+                "value": [
+                    {
+                        "id": "ms-evt-1",
+                        "subject": "Board meeting",
+                        "start": {"dateTime": "2026-11-26T09:00:00Z"},
+                        "end": {"dateTime": "2026-11-26T10:00:00Z"},
+                    }
+                ]
+            }
+        ).encode("utf-8")
+
+
+class MicrosoftMailOpener:
+    def __call__(self, request):
+        return json.dumps(
+            {
+                "value": [
+                    {
+                        "id": "ms-msg-1",
+                        "subject": "Quarterly update",
+                        "bodyPreview": "Numbers attached.",
+                        "receivedDateTime": "2026-11-26T08:00:00Z",
+                        "from": {"emailAddress": {"address": "cfo@example.com"}},
+                    }
+                ]
+            }
+        ).encode("utf-8")
+
+
 class GoogleConnectorTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -85,6 +128,103 @@ class GoogleConnectorTest(unittest.TestCase):
         self.conn.commit()
         with self.assertRaises(ValidationError):
             connectors.sync(self.conn, "google.calendar", now=NOW, home=self.home)
+
+    def test_google_calendar_create_action(self):
+        opener = ActionOpener({"id": "new-event"})
+        result = connectors._action_google_calendar_create(
+            None,
+            None,
+            {"access_token": "x"},
+            {"title": "Review", "start": "2026-11-26T10:00:00Z", "end": "2026-11-26T11:00:00Z"},
+            opener,
+        )
+        self.assertEqual(result["id"], "new-event")
+        self.assertEqual(opener.requests[0].get_method(), "POST")
+
+    def test_gmail_draft_action(self):
+        opener = ActionOpener({"id": "draft-1"})
+        result = connectors._action_google_gmail_draft(
+            None,
+            None,
+            {"access_token": "x"},
+            {"to": "maya@example.com", "subject": "Deck", "body": "Hi"},
+            opener,
+        )
+        self.assertEqual(result["id"], "draft-1")
+        body = json.loads(opener.requests[0].data.decode("utf-8"))
+        self.assertIn("raw", body["message"])
+
+    def test_microsoft_read_adapters(self):
+        events = connectors._sync_microsoft_calendar(
+            NOW, {"access_token": "x"}, opener=MicrosoftCalendarOpener()
+        )
+        self.assertEqual(events[0]["payload"]["title"], "Board meeting")
+        messages = connectors._sync_microsoft_mail(
+            NOW, {"access_token": "x"}, opener=MicrosoftMailOpener()
+        )
+        self.assertEqual(messages[0]["payload"]["sender"], "cfo@example.com")
+
+    def test_microsoft_create_and_send_actions(self):
+        opener = ActionOpener({"id": "ms-created"})
+        created = connectors._action_microsoft_calendar_create(
+            None,
+            None,
+            {"access_token": "x"},
+            {"title": "Review", "start": "2026-11-26T10:00:00Z"},
+            opener,
+        )
+        self.assertEqual(created["id"], "ms-created")
+        sent = connectors._action_microsoft_mail_send(
+            None,
+            None,
+            {"access_token": "x"},
+            {"to": "maya@example.com", "subject": "Deck", "body": "Hi"},
+            opener,
+        )
+        self.assertEqual(sent["id"], "ms-created")
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_call_action_and_runtime_tool(self):
+        self.conn.execute(
+            "INSERT INTO connectors(id, version, status, scopes, connected_at) VALUES('google.calendar', '1.1.0', 'connected', '[]', '2026-01-01')"
+        )
+        self.conn.commit()
+        oauth.TokenStore(self.conn, self.home).save(
+            "google.calendar",
+            {"access_token": "x", "refresh_token": "r", "expires_at": "2099-01-01T00:00:00+00:00"},
+        )
+        result = connectors.call_action(
+            self.conn,
+            self.home,
+            "google.calendar",
+            "create_event",
+            {"title": "Review", "start": "2026-11-26T10:00:00Z"},
+            opener=ActionOpener(),
+        )
+        self.assertEqual(result["result"]["id"], "created-1")
+
+        original = connectors.HTTP_OPENER
+        connectors.HTTP_OPENER = ActionOpener({"id": "runtime-event"})
+        try:
+            run = runtime.propose(
+                self.conn,
+                self.home,
+                "connector.call",
+                {
+                    "connector": "google.calendar",
+                    "action": "create_event",
+                    "arguments": {"title": "Runtime", "start": "2026-11-26T12:00:00Z"},
+                },
+            )
+            self.assertEqual(run["state"], "pending_approval")
+            run = runtime.approve(self.conn, self.home, run["id"])
+            self.assertEqual(run["state"], "completed")
+            executed = [step for step in run["steps"] if step["kind"] == "executed"][0]
+            self.assertEqual(
+                executed["payload"]["data"]["result"]["id"], "runtime-event"
+            )
+        finally:
+            connectors.HTTP_OPENER = original
 
     @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_sync_with_stored_token(self):

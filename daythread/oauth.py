@@ -26,7 +26,11 @@ PROVIDERS = {
     "google": {
         "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
         "token_url": "https://oauth2.googleapis.com/token",
-    }
+    },
+    "microsoft": {
+        "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    },
 }
 
 

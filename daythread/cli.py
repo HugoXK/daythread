@@ -216,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
     connector_disconnect.add_argument("id")
     connector_sync = connector_sub.add_parser("sync", help="sync a connected connector")
     connector_sync.add_argument("id")
+    connector_call = connector_sub.add_parser("call", help="propose a connector action")
+    connector_call.add_argument("id")
+    connector_call.add_argument("action")
+    connector_call.add_argument("--intent", default=None)
+    connector_call.add_argument("--arg", action="append", default=[], metavar="KEY=VALUE")
     connector_items = connector_sub.add_parser("items", help="list synced items")
     connector_items.add_argument("id")
     connector_items.add_argument("--kind", default=None)
@@ -874,6 +879,28 @@ def _connector(args: argparse.Namespace, conn, home: Path) -> None:
         _print_json(result) if args.as_json else print(
             "synced {}: {} item(s), {} new".format(result["id"], result["items"], result["inserted"])
         )
+    elif args.connector_cmd == "call":
+        status = next(
+            (item for item in connectors.list_connectors(conn) if item["id"] == args.id),
+            None,
+        )
+        if status is None:
+            raise KeyError("unknown connector: {}".format(args.id))
+        if status["status"] != "connected":
+            raise ValueError(
+                "connector {} is not connected (dt connector auth {})".format(
+                    args.id, args.id
+                )
+            )
+        arguments = _parse_kv(args.arg)
+        run = runtime.propose(
+            conn,
+            home,
+            "connector.call",
+            {"connector": args.id, "action": args.action, "arguments": arguments},
+            intent=args.intent or "{} {}".format(args.id, args.action),
+        )
+        _print_run(run, args.as_json)
     elif args.connector_cmd == "items":
         items = connectors.list_items(conn, args.id, kind=args.kind)
         if args.as_json:
@@ -1363,6 +1390,8 @@ def _print_run(
         done = run["checkpoint"].get("completed", [])
         if done:
             print("  checkpoint: {}".format(", ".join(done)))
+    if run.get("error"):
+        print("  error: {}".format(run["error"]))
     if run["state"] == "pending_approval":
         print("  next:   dt approve {}".format(run["id"]))
     elif run["state"] == "failed":

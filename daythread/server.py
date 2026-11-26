@@ -265,6 +265,47 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
             if method == "POST" and path.startswith("/v1/connectors/") and path.endswith("/sync"):
                 connector_id = path.split("/")[3]
                 return 200, connectors.sync(conn, connector_id, home=home)
+            if (
+                method == "POST"
+                and path.startswith("/v1/connectors/")
+                and "/actions/" in path
+            ):
+                parts = path.split("/")
+                connector_id = parts[3]
+                action = parts[5]
+                status = next(
+                    (
+                        item
+                        for item in connectors.list_connectors(conn)
+                        if item["id"] == connector_id
+                    ),
+                    None,
+                )
+                if status is None:
+                    raise KeyError("unknown connector: {}".format(connector_id))
+                if status["status"] != "connected":
+                    raise ValueError(
+                        "connector {} is not connected".format(connector_id)
+                    )
+                arguments = body.get("arguments") or {}
+                run = runtime.propose_plan(
+                    conn,
+                    home,
+                    [
+                        {
+                            "id": "s1",
+                            "tool": "connector.call",
+                            "args": {
+                                "connector": connector_id,
+                                "action": action,
+                                "arguments": arguments,
+                            },
+                        }
+                    ],
+                    intent="connector {} {}".format(connector_id, action),
+                    force_approval=True,
+                )
+                return 201, run
             if method == "GET" and path == "/v1/notifications":
                 return 200, scheduler.list_notifications(conn, limit=_paging(query)[0])
             if method == "POST" and path == "/v1/tick":
@@ -377,6 +418,9 @@ def _openapi() -> Dict[str, Any]:
             "/v1/feedback": {"post": {"summary": "Record feedback"}},
             "/v1/connectors": {"get": {"summary": "List connectors"}},
             "/v1/connectors/{id}/sync": {"post": {"summary": "Sync a connector"}},
+            "/v1/connectors/{id}/actions/{action}": {
+                "post": {"summary": "Propose a connector action"}
+            },
             "/v1/notifications": {"get": {"summary": "List notifications"}},
             "/v1/tick": {"post": {"summary": "Run a scheduler job"}},
             "/v1/models": {"get": {"summary": "Model gateway config and usage"}},

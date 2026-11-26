@@ -51,6 +51,11 @@ The baseline is designed to preserve these invariants:
   secrets are referenced via `env:` or `secret:`, not stored in plaintext.
 - The MCP server is read-only by default; write tools require `--allow-write`,
   and plan proposals from external agents require human approval.
+- Connector write actions are `external` by default, run only after approval,
+  are audited, and are treated as non-idempotent. Sent mail cannot be undone.
+- Google now requests calendar write and Gmail modify/send scopes; Microsoft 365
+  requests `Calendars.ReadWrite`, `Mail.ReadWrite`, and `Mail.Send`. Users can
+  revoke access at the provider at any time.
 - The sync relay stores only opaque AES-GCM bundles, requires a bearer token,
   writes `0600` files, and enforces a body-size limit. Run it behind TLS for
   remote access and rotate the relay token.

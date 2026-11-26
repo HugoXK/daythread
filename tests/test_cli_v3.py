@@ -209,6 +209,34 @@ class CliV3Test(unittest.TestCase):
         self.assertEqual(authorize.call_args.args[2], "google.calendar")
         self.assertFalse(authorize.call_args.kwargs["open_browser"])
 
+    def test_connector_call_proposes(self):
+        run_cli(["--home", self.home, "connector", "connect", "mock.gcal"])
+        code, out, _ = run_cli(
+            [
+                "--home",
+                self.home,
+                "--json",
+                "connector",
+                "call",
+                "mock.gcal",
+                "create_event",
+                "--arg",
+                "title=Review",
+                "--arg",
+                "start=2026-11-26T10:00:00Z",
+            ]
+        )
+        self.assertEqual(code, 0)
+        run = json.loads(out)
+        self.assertEqual(run["state"], "pending_approval")
+        self.assertEqual(run["tool"], "connector.call")
+
+        code, _, err = run_cli(
+            ["--home", self.home, "connector", "call", "google.calendar", "create_event"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("not connected", err)
+
     def test_daemon_single_tick(self):
         code, out, _ = run_cli(["--home", self.home, "daemon", "--max-ticks", "1"])
         self.assertEqual(code, 0)

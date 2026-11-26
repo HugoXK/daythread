@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 — write actions and Microsoft 365
+
+- Microsoft identity platform OAuth provider.
+- Microsoft 365 Calendar/Mail read adapters.
+- Connector action framework: Google Calendar create/move, Gmail draft/send,
+  Microsoft Calendar create/move, Microsoft Mail draft/send.
+- `connector.call` tool/CLI/API with `external` risk and approval gating;
+  connector actions are non-idempotent and audited.
+- Google scopes upgraded to calendar write and Gmail modify/send.
+- 150 unit tests.
+
 ## 0.6.0 — MCP server and E2EE relay
 
 - Daythread can run as an MCP stdio server (`dt mcp serve`), exposing briefs,

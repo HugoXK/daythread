@@ -86,6 +86,12 @@ class OAuthTest(unittest.TestCase):
         self.assertFalse(oauth.is_expired({"expires_at": future}))
         self.assertFalse(oauth.is_expired({}))
 
+    def test_microsoft_provider_config(self):
+        set_setting(self.conn, "oauth.microsoft.client_id", "ms-client")
+        config = oauth.get_oauth_config(self.conn, "microsoft", ["offline_access"], self.home)
+        self.assertIn("login.microsoftonline.com", config.auth_url)
+        self.assertIn("login.microsoftonline.com", config.token_url)
+
     def test_callback_server(self):
         server = oauth.CallbackServer(port=0).start()
         try:

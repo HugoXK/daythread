@@ -15,8 +15,8 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.6.0 — MCP server and E2EE relay.** Interfaces may still change. The goal
-is a small, correct, auditable core with tests (143 at this milestone), not
+**v0.7.0 — write actions and Microsoft 365.** Interfaces may still change. The
+goal is a small, correct, auditable core with tests (150 at this milestone), not
 feature breadth.
 
 ## What works today
@@ -43,8 +43,9 @@ feature breadth.
   approvals, connectors, and approval-gated plan proposals to other agents.
   Read-only by default.
 - **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
-  with a loopback callback, encrypted token storage and refresh, Google
-  Calendar/Gmail read adapters, idempotent sync, and local item storage.
+  with a loopback callback, encrypted token storage and refresh, Google and
+  Microsoft 365 Calendar/Mail adapters, read sync, and approval-gated write
+  actions (create/move events, draft/send mail).
 - **Skills**: declarative plans with explicit capabilities, builtin skills,
   install/uninstall, and validation.
 - **Backup/restore**: checksummed versioned bundles, secret redaction, verify,
@@ -118,7 +119,7 @@ dt tick [--job morning|evening|maintenance]
 dt daemon [--interval 60] [--max-ticks N]
 dt notifications | scheduler list
 
-dt connector list|auth|connect|disconnect|sync|items
+dt connector list|auth|connect|disconnect|sync|call|items
 dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
@@ -187,6 +188,22 @@ dt connector auth google.calendar --no-browser   # open the printed URL
 dt connector auth google.gmail --no-browser
 dt connector sync google.calendar
 dt connector sync google.gmail
+
+# Write actions (always approved before execution).
+dt connector call google.calendar create_event \
+  --arg title="Design review" --arg start=2026-11-26T15:00:00Z --arg end=2026-11-26T16:00:00Z
+dt connector call google.gmail create_draft \
+  --arg to=maya@example.com --arg subject=Deck --arg body="Latest version."
+dt approve <run-id>
+
+# Microsoft 365 OAuth.
+dt config set oauth.microsoft.client_id "<client-id>"
+dt config set oauth.microsoft.client_secret_ref "env:MS_CLIENT_SECRET"
+dt connector auth microsoft.calendar --no-browser
+dt connector auth microsoft.mail --no-browser
+dt connector sync microsoft.calendar
+dt connector call microsoft.mail create_draft \
+  --arg to=maya@example.com --arg subject=Deck --arg body="Latest version."
 
 # Backup and restore.
 dt backup
@@ -302,6 +319,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   `env:` or `secret:` references, never the command line.
 - **MCP server**: read-only by default; write tools are hidden unless
   `--allow-write` is set; plans proposed by external agents require approval.
+- **Connector actions** are `external` by default: a run is created and must be
+  approved before any event is created, moved, drafted, or sent.
 - **Relay**: stores only AES-GCM ciphertext, requires a bearer token, writes
   `0600` files, and enforces a body-size limit. Put it behind TLS for remote use.
 
@@ -323,7 +342,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 
 ## Roadmap
 
-1. More OAuth providers (Microsoft 365, Feishu/Lark) and write scopes.
+1. Feishu/Lark and more OAuth providers.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.

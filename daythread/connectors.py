@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sqlite3
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from email.message import EmailMessage
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
@@ -30,6 +32,7 @@ class ConnectorSpec:
     sync: Callable[..., List[Dict[str, Any]]]
     description: str = ""
     oauth_provider: str = ""
+    action_handlers: Dict[str, Callable[..., Dict[str, Any]]] = field(default_factory=dict)
 
 
 def _det_id(seed: str) -> str:
@@ -185,17 +188,23 @@ def _http_json(
     url: str,
     token: Optional[Dict[str, Any]],
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    method: str = "GET",
+    body: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     if not token or not token.get("access_token"):
         raise ValidationError("missing access token")
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": "Bearer {}".format(token["access_token"]),
-            "Accept": "application/json",
-            "User-Agent": "daythread",
-        },
-    )
+    headers = {
+        "Authorization": "Bearer {}".format(token["access_token"]),
+        "Accept": "application/json",
+        "User-Agent": "daythread",
+    }
+    headers.update(extra_headers or {})
+    data = None
+    if body is not None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         if opener is not None:
             raw = opener(request)
@@ -211,6 +220,220 @@ def _http_json(
         raise ProviderError("connector HTTP {}".format(exc.code))
     except Exception as exc:  # noqa: BLE001 - normalized provider error
         raise ProviderError("connector request failed: {}".format(exc))
+
+
+
+def _sync_microsoft_calendar(
+    now: datetime,
+    token: Optional[Dict[str, Any]],
+    opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+) -> List[Dict[str, Any]]:
+    start = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = (
+        "https://graph.microsoft.com/v1.0/me/calendarView"
+        "?startDateTime={}&endDateTime={}&$top=25&$select=id,subject,start,end".format(
+            quote(start), quote(end)
+        )
+    )
+    data = _http_json(
+        url, token, opener, extra_headers={"Prefer": 'outlook.timezone="UTC"'}
+    )
+    items = []
+    for event in data.get("value", []):
+        start_dt = (event.get("start") or {}).get("dateTime")
+        end_dt = (event.get("end") or {}).get("dateTime")
+        items.append(
+            {
+                "kind": "calendar",
+                "external_id": str(event.get("id", "")),
+                "payload": {
+                    "title": event.get("subject") or "(untitled)",
+                    "start": start_dt,
+                    "end": end_dt,
+                },
+            }
+        )
+    return items
+
+
+def _sync_microsoft_mail(
+    now: datetime,
+    token: Optional[Dict[str, Any]],
+    opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+) -> List[Dict[str, Any]]:
+    url = (
+        "https://graph.microsoft.com/v1.0/me/messages"
+        "?$filter=isRead%20eq%20false&$top=10"
+        "&$select=id,from,subject,bodyPreview,receivedDateTime"
+    )
+    data = _http_json(url, token, opener)
+    items = []
+    for message in data.get("value", []):
+        sender = (
+            ((message.get("from") or {}).get("emailAddress") or {}).get("address", "")
+        )
+        items.append(
+            {
+                "kind": "message",
+                "external_id": str(message.get("id", "")),
+                "payload": {
+                    "sender": sender,
+                    "subject": message.get("subject", ""),
+                    "snippet": message.get("bodyPreview", ""),
+                    "body": message.get("bodyPreview", ""),
+                    "ts": message.get("receivedDateTime") or now.isoformat(),
+                },
+            }
+        )
+    return items
+
+
+def _raw_email(args: Dict[str, Any]) -> str:
+    to = str(args.get("to", "")).strip()
+    if not to:
+        raise ValidationError("to is required")
+    message = EmailMessage()
+    message["To"] = to
+    message["Subject"] = str(args.get("subject", ""))
+    message.set_content(str(args.get("body", "")))
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def _action_google_calendar_create(conn, home, token, args, opener=None):
+    title = str(args.get("title", "")).strip()
+    start = str(args.get("start", "")).strip()
+    if not title or not start:
+        raise ValidationError("title and start are required")
+    body = {
+        "summary": title,
+        "start": {"dateTime": start},
+        "end": {"dateTime": str(args.get("end", start))},
+    }
+    return _http_json(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        token,
+        opener,
+        method="POST",
+        body=body,
+    )
+
+
+def _action_google_calendar_move(conn, home, token, args, opener=None):
+    event_id = str(args.get("event_id", "")).strip()
+    start = str(args.get("start", "")).strip()
+    if not event_id or not start:
+        raise ValidationError("event_id and start are required")
+    body = {
+        "start": {"dateTime": start},
+        "end": {"dateTime": str(args.get("end", start))},
+    }
+    return _http_json(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events/{}".format(
+            quote(event_id, safe="")
+        ),
+        token,
+        opener,
+        method="PATCH",
+        body=body,
+    )
+
+
+def _action_google_gmail_draft(conn, home, token, args, opener=None):
+    raw = _raw_email(args)
+    return _http_json(
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        token,
+        opener,
+        method="POST",
+        body={"message": {"raw": raw}},
+    )
+
+
+def _action_google_gmail_send(conn, home, token, args, opener=None):
+    raw = _raw_email(args)
+    return _http_json(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        token,
+        opener,
+        method="POST",
+        body={"raw": raw},
+    )
+
+
+def _action_microsoft_calendar_create(conn, home, token, args, opener=None):
+    title = str(args.get("title", "")).strip()
+    start = str(args.get("start", "")).strip()
+    if not title or not start:
+        raise ValidationError("title and start are required")
+    body = {
+        "subject": title,
+        "start": {"dateTime": start, "timeZone": "UTC"},
+        "end": {"dateTime": str(args.get("end", start)), "timeZone": "UTC"},
+    }
+    return _http_json(
+        "https://graph.microsoft.com/v1.0/me/events",
+        token,
+        opener,
+        method="POST",
+        body=body,
+    )
+
+
+def _action_microsoft_calendar_move(conn, home, token, args, opener=None):
+    event_id = str(args.get("event_id", "")).strip()
+    start = str(args.get("start", "")).strip()
+    if not event_id or not start:
+        raise ValidationError("event_id and start are required")
+    body = {
+        "start": {"dateTime": start, "timeZone": "UTC"},
+        "end": {"dateTime": str(args.get("end", start)), "timeZone": "UTC"},
+    }
+    return _http_json(
+        "https://graph.microsoft.com/v1.0/me/events/{}".format(
+            quote(event_id, safe="")
+        ),
+        token,
+        opener,
+        method="PATCH",
+        body=body,
+    )
+
+
+def _action_microsoft_mail_draft(conn, home, token, args, opener=None):
+    to = str(args.get("to", "")).strip()
+    if not to:
+        raise ValidationError("to is required")
+    body = {
+        "subject": str(args.get("subject", "")),
+        "body": {"contentType": "Text", "content": str(args.get("body", ""))},
+        "toRecipients": [{"emailAddress": {"address": to}}],
+    }
+    return _http_json(
+        "https://graph.microsoft.com/v1.0/me/messages",
+        token,
+        opener,
+        method="POST",
+        body=body,
+    )
+
+
+def _action_microsoft_mail_send(conn, home, token, args, opener=None):
+    to = str(args.get("to", "")).strip()
+    if not to:
+        raise ValidationError("to is required")
+    message = {
+        "subject": str(args.get("subject", "")),
+        "body": {"contentType": "Text", "content": str(args.get("body", ""))},
+        "toRecipients": [{"emailAddress": {"address": to}}],
+    }
+    return _http_json(
+        "https://graph.microsoft.com/v1.0/me/sendMail",
+        token,
+        opener,
+        method="POST",
+        body={"message": message, "saveToSentItems": True},
+    )
 
 
 REGISTRY: Dict[str, ConnectorSpec] = {
@@ -237,24 +460,81 @@ REGISTRY: Dict[str, ConnectorSpec] = {
     "google.calendar": ConnectorSpec(
         id="google.calendar",
         name="Google Calendar",
-        version="1.0.0",
+        version="1.1.0",
         auth="oauth2",
-        scopes=["https://www.googleapis.com/auth/calendar.readonly"],
-        actions=[{"name": "list_events", "risk": "read"}],
+        scopes=["https://www.googleapis.com/auth/calendar"],
+        actions=[
+            {"name": "list_events", "risk": "read"},
+            {"name": "create_event", "risk": "external"},
+            {"name": "move_event", "risk": "external"},
+        ],
         sync=_sync_google_calendar,
-        description="Read primary Google Calendar events.",
+        description="Read and write primary Google Calendar events.",
         oauth_provider="google",
+        action_handlers={
+            "create_event": _action_google_calendar_create,
+            "move_event": _action_google_calendar_move,
+        },
     ),
     "google.gmail": ConnectorSpec(
         id="google.gmail",
         name="Gmail",
+        version="1.1.0",
+        auth="oauth2",
+        scopes=[
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+        ],
+        actions=[
+            {"name": "list_messages", "risk": "read"},
+            {"name": "create_draft", "risk": "external"},
+            {"name": "send", "risk": "external"},
+        ],
+        sync=_sync_google_gmail,
+        description="Read unread Gmail and create drafts or send mail.",
+        oauth_provider="google",
+        action_handlers={
+            "create_draft": _action_google_gmail_draft,
+            "send": _action_google_gmail_send,
+        },
+    ),
+    "microsoft.calendar": ConnectorSpec(
+        id="microsoft.calendar",
+        name="Microsoft 365 Calendar",
         version="1.0.0",
         auth="oauth2",
-        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-        actions=[{"name": "list_messages", "risk": "read"}],
-        sync=_sync_google_gmail,
-        description="Read unread Gmail messages.",
-        oauth_provider="google",
+        scopes=["offline_access", "User.Read", "Calendars.ReadWrite"],
+        actions=[
+            {"name": "list_events", "risk": "read"},
+            {"name": "create_event", "risk": "external"},
+            {"name": "move_event", "risk": "external"},
+        ],
+        sync=_sync_microsoft_calendar,
+        description="Read and write Microsoft 365 calendar events.",
+        oauth_provider="microsoft",
+        action_handlers={
+            "create_event": _action_microsoft_calendar_create,
+            "move_event": _action_microsoft_calendar_move,
+        },
+    ),
+    "microsoft.mail": ConnectorSpec(
+        id="microsoft.mail",
+        name="Microsoft 365 Mail",
+        version="1.0.0",
+        auth="oauth2",
+        scopes=["offline_access", "User.Read", "Mail.ReadWrite", "Mail.Send"],
+        actions=[
+            {"name": "list_messages", "risk": "read"},
+            {"name": "create_draft", "risk": "external"},
+            {"name": "send", "risk": "external"},
+        ],
+        sync=_sync_microsoft_mail,
+        description="Read unread Microsoft 365 mail, create drafts, or send.",
+        oauth_provider="microsoft",
+        action_handlers={
+            "create_draft": _action_microsoft_mail_draft,
+            "send": _action_microsoft_mail_send,
+        },
     ),
 }
 
@@ -359,6 +639,67 @@ def disconnect(
     return {"id": connector_id, "status": "disconnected"}
 
 
+def _get_token(
+    conn: sqlite3.Connection,
+    spec: ConnectorSpec,
+    home: Optional[Any],
+    opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    connector_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if spec.auth != "oauth2":
+        return None
+    if home is None:
+        raise ValidationError("home is required for OAuth connectors")
+    from .oauth import TokenStore, ensure_token, get_oauth_config, is_expired
+
+    target = connector_id or spec.id
+    store = TokenStore(conn, home)
+    token = store.load(target)
+    if not token:
+        raise ValidationError(
+            "connector {} is not authorized: dt connector auth {}".format(target, target)
+        )
+    if is_expired(token):
+        config = get_oauth_config(conn, spec.oauth_provider, spec.scopes, home)
+        token = ensure_token(config, token, opener)
+        store.save(target, token)
+    return token
+
+
+def call_action(
+    conn: sqlite3.Connection,
+    home: Optional[Any],
+    connector_id: str,
+    action: str,
+    arguments: Dict[str, Any],
+    opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+) -> Dict[str, Any]:
+    spec = get_connector(connector_id)
+    row = conn.execute("SELECT * FROM connectors WHERE id = ?", (connector_id,)).fetchone()
+    if row is None or row["status"] != "connected":
+        raise ValueError("connector {} is not connected".format(connector_id))
+    handler = spec.action_handlers.get(action)
+    if handler is None:
+        raise ValidationError(
+            "unknown action {} for {} (available: {})".format(
+                action, connector_id, ", ".join(sorted(spec.action_handlers)) or "none"
+            )
+        )
+    if not isinstance(arguments, dict):
+        raise ValidationError("arguments must be an object")
+    token = _get_token(conn, spec, home, opener, connector_id)
+    result = handler(conn, home, token, arguments, opener)
+    obs.incr(conn, "connector.actions")
+    obs.audit(
+        conn,
+        "connector.action",
+        actor="agent",
+        target=connector_id,
+        detail={"action": action},
+    )
+    return {"connector": connector_id, "action": action, "result": result}
+
+
 def sync(
     conn: sqlite3.Connection,
     connector_id: str,
@@ -371,24 +712,7 @@ def sync(
     if row is None or row["status"] != "connected":
         raise ValueError("connector {} is not connected".format(connector_id))
     moment = now or datetime.now(timezone.utc)
-    token = None
-    if spec.auth == "oauth2":
-        if home is None:
-            raise ValidationError("home is required to sync OAuth connectors")
-        from .oauth import TokenStore, ensure_token, get_oauth_config, is_expired
-
-        store = TokenStore(conn, home)
-        token = store.load(connector_id)
-        if not token:
-            raise ValidationError(
-                "connector {} is not authorized: dt connector auth {}".format(
-                    connector_id, connector_id
-                )
-            )
-        if is_expired(token):
-            config = get_oauth_config(conn, spec.oauth_provider, spec.scopes, home)
-            token = ensure_token(config, token, opener)
-            store.save(connector_id, token)
+    token = _get_token(conn, spec, home, opener, connector_id)
 
     limit = int(get_setting(conn, "connector.max_items", "100") or 100)
     items = spec.sync(moment, token, opener)[:limit]
