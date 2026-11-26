@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from . import proactivity
 from .db import json_load, row_to_dict
 
 
@@ -71,12 +72,16 @@ def morning_brief(
             "SELECT * FROM runs WHERE state = 'pending_approval' ORDER BY created_at"
         ).fetchall()
     ]
+    messages = _messages(conn)
+    candidates = proactivity.list_candidates(conn, status="new", limit=5)
     return {
         "kind": "morning",
         "date": day,
         "calendar": events,
         "tasks": tasks,
         "commitments": commitments,
+        "messages": messages,
+        "candidates": candidates,
         "pending_approvals": pending,
     }
 
@@ -118,6 +123,8 @@ def evening_brief(
         "SELECT * FROM facts WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 5",
         (),
     )
+    messages = _messages(conn)
+    candidates = proactivity.list_candidates(conn, status="new", limit=5)
     return {
         "kind": "evening",
         "date": today,
@@ -125,6 +132,8 @@ def evening_brief(
         "calendar": events,
         "tasks": open_tasks,
         "completed_today": done_today,
+        "messages": messages,
+        "candidates": candidates,
         "pending_approvals": pending,
         "recent_facts": recent,
     }
@@ -139,6 +148,7 @@ def render(brief: Dict[str, Any]) -> str:
         _section(lines, "Calendar", brief.get("calendar", []), _event_line)
         _section(lines, "Tasks", brief.get("tasks", []), _task_line)
         _section(lines, "Commitments", brief.get("commitments", []), _fact_line)
+        _section(lines, "Messages", brief.get("messages", []), _message_line)
     else:
         _section(lines, "Tomorrow", brief.get("calendar", []), _event_line)
         _section(lines, "Open tasks", brief.get("tasks", []), _task_line)
@@ -146,6 +156,9 @@ def render(brief: Dict[str, Any]) -> str:
             lines, "Completed today", brief.get("completed_today", []), _task_line
         )
         _section(lines, "Recently remembered", brief.get("recent_facts", []), _fact_line)
+        _section(lines, "Messages", brief.get("messages", []), _message_line)
+
+    _section(lines, "Needs attention", brief.get("candidates", []), _candidate_line)
 
     approvals = brief.get("pending_approvals", [])
     if approvals:
@@ -191,6 +204,14 @@ def _task_line(task: Dict[str, Any]) -> str:
     return "{}{}".format(task.get("title", ""), suffix)
 
 
+def _message_line(message: Dict[str, Any]) -> str:
+    return "{} — {}".format(message.get("sender", ""), message.get("subject", ""))
+
+
+def _candidate_line(candidate: Dict[str, Any]) -> str:
+    return "{} (score {:.2f})".format(candidate.get("title", ""), float(candidate.get("score", 0.0)))
+
+
 def _fact_line(fact: Dict[str, Any]) -> str:
     value = fact.get("object")
     if not isinstance(value, str):
@@ -200,6 +221,12 @@ def _fact_line(fact: Dict[str, Any]) -> str:
     return "{} · {} · {}".format(
         fact.get("subject_id", ""), fact.get("predicate", ""), value
     )
+
+
+def _messages(conn: sqlite3.Connection, limit: int = 5) -> List[Dict[str, Any]]:
+    return [dict(row) for row in conn.execute(
+        "SELECT * FROM messages ORDER BY ts DESC LIMIT ?", (limit,)
+    ).fetchall()]
 
 
 def _args_hint(args: Dict[str, Any]) -> str:

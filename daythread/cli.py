@@ -10,11 +10,25 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import __version__, brief, export, memory, policy, runtime
-from .db import connect, init_db, is_initialized
+from . import (
+    __version__,
+    brief,
+    connectors,
+    export,
+    memory,
+    migrations,
+    obs,
+    planner,
+    policy,
+    proactivity,
+    runtime,
+    skills,
+)
+from .db import connect, init_db, is_initialized, set_setting
 from .ledger import get_steps, verify_run
+from .server import ApiServer, ensure_token
 
-SUBJECT_TYPES = ("self", "person", "project", "org", "routine", "goal")
+SUBJECT_TYPES = memory.SUBJECT_TYPES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,10 +46,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version="daythread {}".format(__version__))
 
     sub = parser.add_subparsers(dest="cmd", required=True)
-
     sub.add_parser("init", help="initialize the local database")
-
+    sub.add_parser("migrate", help="apply pending schema migrations")
+    sub.add_parser("doctor", help="check local state and integrity")
     sub.add_parser("demo", help="seed a small demo dataset and print a brief")
+
+    config = sub.add_parser("config", help="show or set local settings")
+    config_sub = config.add_subparsers(dest="config_cmd", required=True)
+    config_sub.add_parser("show", help="show settings")
+    config_set = config_sub.add_parser("set", help="set a setting")
+    config_set.add_argument("key")
+    config_set.add_argument("value")
 
     fact = sub.add_parser("fact", help="manage structured memory facts")
     fact_sub = fact.add_subparsers(dest="fact_cmd", required=True)
@@ -47,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     fact_add.add_argument("--value", required=True)
     fact_add.add_argument("--confidence", type=float, default=0.8)
     fact_add.add_argument("--source", default="user")
+    fact_add.add_argument("--tags", default="")
 
     fact_list = fact_sub.add_parser("list", help="list facts")
     fact_list.add_argument("--type", choices=SUBJECT_TYPES)
@@ -61,18 +83,52 @@ def build_parser() -> argparse.ArgumentParser:
     fact_search = fact_sub.add_parser("search", help="search facts")
     fact_search.add_argument("query")
 
-    task = sub.add_parser("task", help="inspect local tasks")
+    fact_edit = fact_sub.add_parser("edit", help="edit a fact")
+    fact_edit.add_argument("id")
+    fact_edit.add_argument("--value")
+    fact_edit.add_argument("--confidence", type=float)
+    fact_edit.add_argument("--tags")
+    fact_edit.add_argument("--sensitivity", choices=memory.SENSITIVITIES)
+
+    fact_extract = fact_sub.add_parser("extract", help="extract candidate facts from text")
+    fact_extract.add_argument("text")
+    fact_extract.add_argument("--apply", action="store_true")
+
+    fact_history = fact_sub.add_parser("history", help="show fact history")
+    fact_history.add_argument("id")
+
+    fact_sub.add_parser("conflicts", help="list conflicting facts")
+
+    fact_import = fact_sub.add_parser("import", help="import facts from JSON")
+    fact_import.add_argument("path")
+
+    task = sub.add_parser("task", help="manage local tasks")
     task_sub = task.add_subparsers(dest="task_cmd", required=True)
     task_sub.add_parser("list", help="list tasks")
     task_done = task_sub.add_parser("done", help="mark a task done")
     task_done.add_argument("id")
+    task_create = task_sub.add_parser("create", help="create a task")
+    task_create.add_argument("--title", required=True)
+    task_create.add_argument("--due", default=None)
+    task_update = task_sub.add_parser("update", help="update a task")
+    task_update.add_argument("id")
+    task_update.add_argument("--title")
+    task_update.add_argument("--status")
+    task_update.add_argument("--due")
 
     brief_p = sub.add_parser("brief", help="print the morning or evening brief")
     brief_p.add_argument("--evening", action="store_true")
 
+    plan = sub.add_parser("plan", help="preview or execute a plan")
+    plan.add_argument("intent", nargs="?", help="intent template, e.g. 'send me@x | Deck | hi'")
+    plan.add_argument("--file", default=None, help="JSON plan file with steps")
+    plan.add_argument("--execute", action="store_true")
+    plan.add_argument("--idempotency-key", default=None)
+
     act = sub.add_parser("act", help="propose a tool action (runs the policy gate)")
     act.add_argument("tool", help="tool name, e.g. note.write or message.send")
     act.add_argument("--intent", default=None)
+    act.add_argument("--idempotency-key", default=None)
     act.add_argument(
         "--arg",
         action="append",
@@ -87,14 +143,15 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show", help="show a run and its ledger steps")
     show.add_argument("run_id")
 
-    approve = sub.add_parser("approve", help="approve a pending run")
-    approve.add_argument("run_id")
-
-    reject = sub.add_parser("reject", help="reject a pending run")
-    reject.add_argument("run_id")
-
-    undo = sub.add_parser("undo", help="undo a completed reversible run")
-    undo.add_argument("run_id")
+    for name, help_text in (
+        ("approve", "approve a pending run"),
+        ("reject", "reject a pending run"),
+        ("undo", "undo a completed reversible run"),
+        ("resume", "resume a failed or paused run"),
+        ("cancel", "cancel a pending or running run"),
+    ):
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("run_id")
 
     ledger = sub.add_parser("ledger", help="show or verify a run ledger")
     ledger.add_argument("run_id")
@@ -107,9 +164,69 @@ def build_parser() -> argparse.ArgumentParser:
     pol_set.add_argument("risk", choices=policy.RISKS)
     pol_set.add_argument("decision", choices=policy.DECISIONS)
 
+    signal = sub.add_parser("signal", help="ingest and list proactivity signals")
+    signal_sub = signal.add_subparsers(dest="signal_cmd", required=True)
+    signal_add = signal_sub.add_parser("add", help="add a signal")
+    signal_add.add_argument("--source", required=True)
+    signal_add.add_argument("--kind", required=True)
+    signal_add.add_argument("--payload", default="{}")
+    signal_add.add_argument("--dedupe-key", default=None)
+    signal_list = signal_sub.add_parser("list", help="list signals")
+    signal_list.add_argument("--unprocessed", action="store_true")
+    signal_list.add_argument("--limit", type=int, default=50)
+
+    proactive = sub.add_parser("proactive", help="score candidates and enforce the interrupt budget")
+    proactive.add_argument("--deliver", action="store_true")
+
+    candidate = sub.add_parser("candidate", help="inspect proactive candidates")
+    candidate_sub = candidate.add_subparsers(dest="candidate_cmd", required=True)
+    candidate_list = candidate_sub.add_parser("list", help="list candidates")
+    candidate_list.add_argument("--status", default="new")
+    candidate_list.add_argument("--limit", type=int, default=20)
+
+    feedback = sub.add_parser("feedback", help="record proactive feedback")
+    feedback.add_argument("target")
+    feedback.add_argument("action", choices=("accept", "ignore", "mute"))
+
+    connector = sub.add_parser("connector", help="manage connectors")
+    connector_sub = connector.add_subparsers(dest="connector_cmd", required=True)
+    connector_sub.add_parser("list", help="list connectors")
+    connector_connect = connector_sub.add_parser("connect", help="connect a connector")
+    connector_connect.add_argument("id")
+    connector_connect.add_argument("--token-ref", default=None)
+    connector_disconnect = connector_sub.add_parser("disconnect", help="disconnect a connector")
+    connector_disconnect.add_argument("id")
+    connector_sync = connector_sub.add_parser("sync", help="sync a connected connector")
+    connector_sync.add_argument("id")
+    connector_items = connector_sub.add_parser("items", help="list synced items")
+    connector_items.add_argument("id")
+    connector_items.add_argument("--kind", default=None)
+
+    skill = sub.add_parser("skill", help="manage declarative skills")
+    skill_sub = skill.add_subparsers(dest="skill_cmd", required=True)
+    skill_sub.add_parser("list", help="list skills")
+    skill_show = skill_sub.add_parser("show", help="show a skill manifest")
+    skill_show.add_argument("id")
+    skill_install = skill_sub.add_parser("install", help="install a skill from JSON")
+    skill_install.add_argument("path")
+    skill_run = skill_sub.add_parser("run", help="run a skill as a plan")
+    skill_run.add_argument("id")
+    skill_run.add_argument("--idempotency-key", default=None)
+    skill_uninstall = skill_sub.add_parser("uninstall", help="uninstall a skill")
+    skill_uninstall.add_argument("id")
+
+    sub.add_parser("metrics", help="show local metrics")
+    audit = sub.add_parser("audit", help="show the audit log")
+    audit.add_argument("--limit", type=int, default=50)
+
     exp = sub.add_parser("export", help="export memory and local state")
     exp.add_argument("--format", choices=("md", "json"), default="md")
     exp.add_argument("--out", default=None, help="write to a file instead of stdout")
+
+    serve = sub.add_parser("serve", help="start the local HTTP API")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--print-token", action="store_true")
 
     return parser
 
@@ -137,7 +254,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None:
     cmd = args.cmd
     if cmd == "init":
-        print("initialized {}".format(db_path))
+        print("initialized {} (schema v{})".format(db_path, migrations.current_version(conn)))
+    elif cmd == "migrate":
+        version = migrations.migrate(conn)
+        print("schema v{}".format(version))
+    elif cmd == "doctor":
+        _doctor(conn, home, db_path)
+    elif cmd == "config":
+        _config(args, conn)
     elif cmd == "demo":
         _demo(conn, home, args)
     elif cmd == "fact":
@@ -150,9 +274,18 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
             _print_json(data)
         else:
             print(brief.render(data))
+    elif cmd == "plan":
+        _plan(args, conn, home)
     elif cmd == "act":
         payload = _parse_kv(args.arg)
-        run = runtime.propose(conn, home, args.tool, payload, intent=args.intent)
+        run = runtime.propose(
+            conn,
+            home,
+            args.tool,
+            payload,
+            intent=args.intent,
+            idempotency_key=args.idempotency_key,
+        )
         _print_run(run, args.as_json)
     elif cmd == "runs":
         runs = runtime.list_runs(conn, limit=args.limit)
@@ -168,25 +301,60 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                     )
                 )
     elif cmd == "show":
-        _print_run(runtime.get_run(conn, args.run_id), args.as_json, steps=True)
+        _print_run(runtime.get_run(conn, args.run_id), args.as_json, steps=True, verbose=True)
     elif cmd == "approve":
         _print_run(runtime.approve(conn, home, args.run_id), args.as_json, steps=True)
     elif cmd == "reject":
         _print_run(runtime.reject(conn, args.run_id), args.as_json, steps=True)
     elif cmd == "undo":
         _print_run(runtime.undo_run(conn, home, args.run_id), args.as_json, steps=True)
+    elif cmd == "resume":
+        _print_run(runtime.resume_run(conn, home, args.run_id), args.as_json, steps=True)
+    elif cmd == "cancel":
+        _print_run(runtime.cancel_run(conn, args.run_id), args.as_json, steps=True)
     elif cmd == "ledger":
         _ledger(args, conn)
     elif cmd == "policy":
         _policy(args, conn)
+    elif cmd == "signal":
+        _signal(args, conn)
+    elif cmd == "proactive":
+        _proactive(args, conn)
+    elif cmd == "candidate":
+        _candidate(args, conn)
+    elif cmd == "feedback":
+        result = proactivity.feedback(conn, args.target, args.action)
+        _print_json(result) if args.as_json else print(
+            "feedback {}: {}".format(result["action"], result["target"][:8])
+        )
+    elif cmd == "connector":
+        _connector(args, conn)
+    elif cmd == "skill":
+        _skill(args, conn, home)
+    elif cmd == "metrics":
+        _print_json(obs.snapshot(conn))
+    elif cmd == "audit":
+        entries = obs.audit_history(conn, limit=args.limit)
+        if args.as_json:
+            _print_json(entries)
+        else:
+            for entry in entries:
+                print(
+                    "{}  {:<10} {:<22} {}".format(
+                        entry["ts"], entry["actor"], entry["action"], entry["target"] or ""
+                    )
+                )
     elif cmd == "export":
         _export(args, conn)
+    elif cmd == "serve":
+        _serve(args, home, db_path)
     else:
         raise ValueError("unknown command: {}".format(cmd))
 
 
 def _fact(args: argparse.Namespace, conn) -> None:
     if args.fact_cmd == "add":
+        tags = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
         fact = memory.add_fact(
             conn,
             subject_type=args.type,
@@ -195,6 +363,7 @@ def _fact(args: argparse.Namespace, conn) -> None:
             value=args.value,
             confidence=args.confidence,
             source=args.source,
+            tags=tags,
         )
         if args.as_json:
             _print_json(fact)
@@ -228,6 +397,68 @@ def _fact(args: argparse.Namespace, conn) -> None:
             _print_json(facts)
         else:
             _print_facts(facts)
+    elif args.fact_cmd == "edit":
+        tags = None
+        if args.tags is not None:
+            tags = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
+        fact = memory.edit_fact(
+            conn,
+            args.id,
+            value=args.value,
+            confidence=args.confidence,
+            tags=tags,
+            sensitivity=args.sensitivity,
+        )
+        _print_json(fact) if args.as_json else _print_facts([fact])
+    elif args.fact_cmd == "extract":
+        candidates = memory.extract_facts(args.text)
+        if args.apply:
+            facts = memory.apply_extracted(conn, candidates)
+            if args.as_json:
+                _print_json(facts)
+            else:
+                _print_facts(facts)
+        else:
+            if args.as_json:
+                _print_json(candidates)
+            else:
+                if not candidates:
+                    print("no facts found")
+                for candidate in candidates:
+                    print(
+                        "{:<9} {} · {} · {}  ({:.2f})".format(
+                            candidate["subject_type"],
+                            candidate["subject_id"],
+                            candidate["predicate"],
+                            candidate["value"],
+                            candidate["confidence"],
+                        )
+                    )
+    elif args.fact_cmd == "history":
+        entries = memory.history(conn, args.id)
+        if args.as_json:
+            _print_json(entries)
+        else:
+            for entry in entries:
+                print("{}  {}".format(entry["ts"], entry["action"]))
+    elif args.fact_cmd == "conflicts":
+        conflicts = memory.conflicts(conn)
+        if args.as_json:
+            _print_json(conflicts)
+        else:
+            if not conflicts:
+                print("no conflicts")
+            for item in conflicts:
+                print(
+                    "{} · {} · {}  ({} variants)".format(
+                        item["subject_type"], item["subject_id"], item["predicate"], item["variants"]
+                    )
+                )
+    elif args.fact_cmd == "import":
+        path = Path(args.path).expanduser()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        count = memory.import_json(conn, data)
+        print("imported {} fact(s)".format(count))
 
 
 def _task(args: argparse.Namespace, conn, home: Path) -> None:
@@ -246,19 +477,74 @@ def _task(args: argparse.Namespace, conn, home: Path) -> None:
                 print("[{}] {}  {}{}".format(task["status"], task["id"][:8], task["title"], due))
     elif args.task_cmd == "done":
         run = runtime.propose(
-            conn,
-            home,
-            "task.done",
-            {"id": args.id},
-            intent="complete task {}".format(args.id[:8]),
+            conn, home, "task.done", {"id": args.id}, intent="complete task {}".format(args.id[:8])
         )
         _print_run(run, args.as_json)
+    elif args.task_cmd == "create":
+        run = runtime.propose(
+            conn,
+            home,
+            "task.create",
+            {"title": args.title, "due": args.due},
+            intent="create task",
+        )
+        _print_run(run, args.as_json)
+    elif args.task_cmd == "update":
+        payload = {"id": args.id}
+        if args.title is not None:
+            payload["title"] = args.title
+        if args.status is not None:
+            payload["status"] = args.status
+        if args.due is not None:
+            payload["due"] = args.due
+        run = runtime.propose(conn, home, "task.update", payload, intent="update task")
+        _print_run(run, args.as_json)
+
+
+def _plan(args: argparse.Namespace, conn, home: Path) -> None:
+    if args.file:
+        data = json.loads(Path(args.file).expanduser().read_text(encoding="utf-8"))
+        steps = planner.from_json(data)
+        intent = None
+    elif args.intent:
+        steps = planner.from_intent(args.intent)
+        intent = args.intent
+    else:
+        raise ValueError("plan needs an intent or --file")
+
+    if args.execute:
+        run = runtime.propose_plan(
+            conn,
+            home,
+            steps,
+            intent=intent,
+            idempotency_key=args.idempotency_key,
+        )
+        _print_run(run, args.as_json, steps=True)
+        return
+    preview = planner.preview(conn, steps)
+    if args.as_json:
+        _print_json(preview)
+        return
+    print(
+        "plan: {} step(s)  risk={}  approval={}  denied={}".format(
+            len(preview["steps"]),
+            preview["risk"],
+            preview["requires_approval"],
+            preview["denied"],
+        )
+    )
+    for item in preview["steps"]:
+        deps = ",".join(item["depends_on"]) or "-"
+        print(
+            "  {:<4} {:<18} {:<12} {:<6} deps={}".format(
+                item["id"], item["tool"], item["risk"], item["decision"], deps
+            )
+        )
 
 
 def _ledger(args: argparse.Namespace, conn) -> None:
     steps = get_steps(conn, args.run_id)
-    ok = None
-    errors: List[str] = []
     if args.verify:
         ok, errors = verify_run(conn, args.run_id)
         if args.as_json:
@@ -297,6 +583,136 @@ def _policy(args: argparse.Namespace, conn) -> None:
         print("policy {} = {}".format(args.risk, args.decision))
 
 
+def _signal(args: argparse.Namespace, conn) -> None:
+    if args.signal_cmd == "add":
+        try:
+            payload = json.loads(args.payload)
+        except ValueError:
+            raise ValueError("payload must be valid JSON")
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a JSON object")
+        signal = proactivity.ingest_signal(
+            conn,
+            source=args.source,
+            kind=args.kind,
+            payload=payload,
+            dedupe_key=args.dedupe_key,
+        )
+        _print_json(signal) if args.as_json else print(
+            "signal {} ({}:{})".format(signal["id"][:8], signal["source"], signal["kind"])
+        )
+    elif args.signal_cmd == "list":
+        signals = proactivity.list_signals(conn, unprocessed=args.unprocessed, limit=args.limit)
+        if args.as_json:
+            _print_json(signals)
+        else:
+            if not signals:
+                print("no signals")
+            for signal in signals:
+                print(
+                    "{}  {:<8} {:<10} {}".format(
+                        signal["ts"], signal["source"], signal["kind"], signal["payload"]
+                    )
+                )
+
+
+def _proactive(args: argparse.Namespace, conn) -> None:
+    result = proactivity.proactive(conn, deliver=args.deliver)
+    if args.as_json:
+        _print_json(result)
+        return
+    budget = result["budget"]
+    print(
+        "budget: {}/{}  can_interrupt={}  deferred={}".format(
+            budget["sent"], budget["max_sent"], result["can_interrupt"], result.get("deferred", False)
+        )
+    )
+    if not result["candidates"]:
+        print("no candidates")
+    for item in result["candidates"]:
+        marker = "*" if item in result["selected"] else " "
+        print("{} {:.2f}  {:<12} {}".format(marker, item["score"], item["kind"], item["title"]))
+
+
+def _candidate(args: argparse.Namespace, conn) -> None:
+    items = proactivity.list_candidates(conn, status=args.status, limit=args.limit)
+    if args.as_json:
+        _print_json(items)
+    else:
+        for item in items:
+            print("{:.2f}  {:<12} {:<10} {}".format(item["score"], item["kind"], item["status"], item["title"]))
+
+
+def _connector(args: argparse.Namespace, conn) -> None:
+    if args.connector_cmd == "list":
+        items = connectors.list_connectors(conn)
+        if args.as_json:
+            _print_json(items)
+        else:
+            for item in items:
+                print(
+                    "{:<12} {:<12} {:<10} {}".format(
+                        item["id"], item["status"], item["version"], item["name"]
+                    )
+                )
+    elif args.connector_cmd == "connect":
+        result = connectors.connect(conn, args.id, token_ref=args.token_ref)
+        _print_json(result) if args.as_json else print("connected {}".format(result["id"]))
+    elif args.connector_cmd == "disconnect":
+        result = connectors.disconnect(conn, args.id)
+        _print_json(result) if args.as_json else print("disconnected {}".format(result["id"]))
+    elif args.connector_cmd == "sync":
+        result = connectors.sync(conn, args.id)
+        _print_json(result) if args.as_json else print(
+            "synced {}: {} item(s), {} new".format(result["id"], result["items"], result["inserted"])
+        )
+    elif args.connector_cmd == "items":
+        items = connectors.list_items(conn, args.id, kind=args.kind)
+        if args.as_json:
+            _print_json(items)
+        else:
+            for item in items:
+                print("{}  {:<10} {}".format(item["external_id"], item["kind"], item["payload"]))
+
+
+def _skill(args: argparse.Namespace, conn, home: Path) -> None:
+    if args.skill_cmd == "list":
+        items = skills.list_skills(conn)
+        if args.as_json:
+            _print_json(items)
+        else:
+            for item in items:
+                print(
+                    "{:<14} {:<8} {:<6} {}".format(
+                        item["id"],
+                        item["version"],
+                        "builtin" if item.get("builtin") else "local",
+                        ", ".join(item.get("permissions", [])),
+                    )
+                )
+    elif args.skill_cmd == "show":
+        _print_json(skills.get_skill(conn, args.id))
+    elif args.skill_cmd == "install":
+        manifest = json.loads(Path(args.path).expanduser().read_text(encoding="utf-8"))
+        installed = skills.install(conn, manifest)
+        _print_json(installed) if args.as_json else print(
+            "installed {} v{}".format(installed["id"], installed["version"])
+        )
+    elif args.skill_cmd == "run":
+        steps = skills.run(conn, args.id)
+        run = runtime.propose_plan(
+            conn,
+            home,
+            steps,
+            intent="skill:{}".format(args.id),
+            idempotency_key=args.idempotency_key,
+        )
+        _print_run(run, args.as_json, steps=True)
+    elif args.skill_cmd == "uninstall":
+        skills.uninstall(conn, args.id)
+        print("uninstalled {}".format(args.id))
+
+
 def _export(args: argparse.Namespace, conn) -> None:
     if args.format == "json":
         text = json.dumps(export.export_json(conn), ensure_ascii=False, indent=2)
@@ -309,6 +725,51 @@ def _export(args: argparse.Namespace, conn) -> None:
         print("exported to {}".format(path))
     else:
         print(text)
+
+
+def _config(args: argparse.Namespace, conn) -> None:
+    if args.config_cmd == "show":
+        rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
+        settings = {row["key"]: row["value"] for row in rows}
+        if args.as_json:
+            _print_json(settings)
+        else:
+            if not settings:
+                print("no settings")
+            for key, value in settings.items():
+                print("{:<32} {}".format(key, value))
+    elif args.config_cmd == "set":
+        set_setting(conn, args.key, args.value)
+        print("{} = {}".format(args.key, args.value))
+
+
+def _doctor(conn, home: Path, db_path: Path) -> None:
+    version = migrations.current_version(conn)
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    counts = {}
+    for table in ("facts", "runs", "signals", "candidates", "connectors", "messages"):
+        counts[table] = conn.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0]
+    print("home:        {}".format(home))
+    print("db:          {}".format(db_path))
+    print("schema:      v{}".format(version))
+    print("integrity:   {}".format(integrity))
+    print("writable:    {}".format(os.access(home, os.W_OK)))
+    print("api_token:   {}".format((home / "api_token").exists()))
+    print("policy:      {}".format(json.dumps(policy.load_policy(conn), sort_keys=True)))
+    print("counts:      {}".format(json.dumps(counts, sort_keys=True)))
+
+
+def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:
+    if args.print_token:
+        print(ensure_token(home))
+        return
+    server = ApiServer(home, db_path, host=args.host, port=args.port)
+    print("daythread API on http://{}:{}".format(args.host, server.port))
+    print("token: {}".format(server.token))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.stop()
 
 
 def _demo(conn, home: Path, args: argparse.Namespace) -> None:
@@ -325,14 +786,24 @@ def _demo(conn, home: Path, args: argparse.Namespace) -> None:
     for subject_type, subject_id, predicate, value in facts:
         memory.add_fact(conn, subject_type, subject_id, predicate, value)
 
+    connectors.connect(conn, "mock.gcal")
+    connectors.connect(conn, "mock.gmail")
+    connectors.sync(conn, "mock.gcal", now=now)
+    connectors.sync(conn, "mock.gmail", now=now)
+    proactivity.ingest_signal(
+        conn,
+        source="demo",
+        kind="note",
+        payload={"title": "Review the brand launch page"},
+        dedupe_key="demo-brand-launch",
+        now=now,
+    )
+
     runtime.propose(
         conn,
         home,
         "calendar.add",
-        {
-            "title": "Design review",
-            "start": (now + timedelta(hours=2)).isoformat(),
-        },
+        {"title": "Design review", "start": (now + timedelta(hours=2)).isoformat()},
         intent="demo calendar",
     )
     runtime.propose(
@@ -346,24 +817,17 @@ def _demo(conn, home: Path, args: argparse.Namespace) -> None:
         conn,
         home,
         "message.draft",
-        {
-            "to": "maya@example.com",
-            "subject": "Deck",
-            "body": "Latest version attached.",
-        },
+        {"to": "maya@example.com", "subject": "Deck", "body": "Latest version attached."},
         intent="demo draft",
     )
     external = runtime.propose(
         conn,
         home,
         "message.send",
-        {
-            "to": "maya@example.com",
-            "subject": "Deck",
-            "body": "Latest version attached.",
-        },
+        {"to": "maya@example.com", "subject": "Deck", "body": "Latest version attached."},
         intent="demo external send",
     )
+    proactive = proactivity.proactive(conn, now=now, deliver=False)
 
     data = brief.morning_brief(conn, now=now)
     if args.as_json:
@@ -372,13 +836,17 @@ def _demo(conn, home: Path, args: argparse.Namespace) -> None:
                 "brief": data,
                 "draft_run": draft["id"],
                 "pending_run": external["id"],
+                "proactive": proactive,
             }
         )
         return
     print(brief.render(data))
     print("")
-    print("Draft run:   {} ({})".format(draft["id"][:8], draft["state"]))
+    print("Draft run:    {} ({})".format(draft["id"][:8], draft["state"]))
     print("External run: {} ({})".format(external["id"][:8], external["state"]))
+    print("Proactive:    {}/{} interrupts used, {} candidate(s)".format(
+        proactive["budget"]["sent"], proactive["budget"]["max_sent"], len(proactive["candidates"])
+    ))
     print("Approve with: dt approve {}".format(external["id"]))
 
 
@@ -394,7 +862,12 @@ def _parse_kv(values: List[str]) -> Dict[str, str]:
     return parsed
 
 
-def _print_run(run: Dict[str, Any], as_json: bool, steps: bool = False) -> None:
+def _print_run(
+    run: Dict[str, Any],
+    as_json: bool,
+    steps: bool = False,
+    verbose: bool = False,
+) -> None:
     if as_json:
         _print_json(run)
         return
@@ -404,17 +877,49 @@ def _print_run(run: Dict[str, Any], as_json: bool, steps: bool = False) -> None:
         )
     )
     print("  intent: {}".format(run["intent"]))
+    plan_steps = (run.get("plan") or {}).get("steps", [])
+    if len(plan_steps) > 1:
+        print("  plan:")
+        for step in plan_steps:
+            deps = ",".join(step.get("depends_on", [])) or "-"
+            print("    {:<4} {:<18} deps={}".format(step["id"], step["tool"], deps))
+    if run.get("budget"):
+        print("  budget: {}".format(json.dumps(run["budget"], sort_keys=True)))
+    if run.get("checkpoint"):
+        done = run["checkpoint"].get("completed", [])
+        if done:
+            print("  checkpoint: {}".format(", ".join(done)))
     if run["state"] == "pending_approval":
         print("  next:   dt approve {}".format(run["id"]))
-    if run["state"] in ("completed", "undone", "failed", "rejected", "denied"):
-        print("  replay: dt ledger {}".format(run["id"]))
+    elif run["state"] == "failed":
+        print("  next:   dt resume {}  |  dt show {}".format(run["id"], run["id"]))
+    elif run["state"] == "completed":
+        if _is_undoable(run):
+            print("  next:   dt undo {}  |  dt ledger {} --verify".format(run["id"], run["id"]))
+        else:
+            print("  next:   dt ledger {} --verify".format(run["id"]))
     if steps:
         for step in run.get("steps", []):
-            print(
-                "  [{:>2}] {:<16} {}".format(
-                    step["seq"], step["kind"], json.dumps(step["payload"], ensure_ascii=False)
-                )
-            )
+            if verbose:
+                detail = json.dumps(step["payload"], ensure_ascii=False)
+            else:
+                payload = step.get("payload") or {}
+                detail = payload.get("summary", "") if isinstance(payload, dict) else ""
+            print("  [{:>2}] {:<18} {}".format(step["seq"], step["kind"], detail))
+
+
+def _is_undoable(run: Dict[str, Any]) -> bool:
+    for step in run.get("steps", []):
+        if step.get("kind") not in ("executed", "step.succeeded"):
+            continue
+        payload = step.get("payload") or {}
+        if payload.get("idempotent_hit"):
+            continue
+        if payload.get("irreversible"):
+            return False
+        if payload.get("undo"):
+            return True
+    return False
 
 
 def _print_facts(facts: List[Dict[str, Any]]) -> None:
@@ -423,13 +928,15 @@ def _print_facts(facts: List[Dict[str, Any]]) -> None:
         return
     for fact in facts:
         deleted = " (deleted)" if fact.get("deleted_at") else ""
+        tags = " tags={}".format(fact.get("tags")) if fact.get("tags") else ""
         print(
-            "{}  {:<9} {} · {} · {}{}".format(
+            "{}  {:<9} {} · {} · {}{}{}".format(
                 fact["id"][:8],
                 fact["subject_type"],
                 fact["subject_id"],
                 fact["predicate"],
                 fact["object"],
+                tags,
                 deleted,
             )
         )
