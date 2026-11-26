@@ -15,15 +15,16 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.3.0 — agent infrastructure.** Interfaces may still change. The goal is a
-small, correct, auditable core with tests (108 at this milestone), not feature
-breadth.
+**v0.4.0 — security, sync, and evaluation.** Interfaces may still change. The
+goal is a small, correct, auditable core with tests (122 at this milestone), not
+feature breadth.
 
 ## What works today
 
 - **Living memory**: structured facts with provenance, confidence, tags,
   sensitivity, score, edit history, supersede, conflict detection, tombstones,
-  deterministic text extraction, and JSON import/export.
+  deterministic text extraction, JSON import/export, and FTS5-ranked search
+  with a LIKE fallback.
 - **Plan runtime**: validated DAGs, policy aggregation, approval gate,
   idempotency keys, per-step retries, checkpoints, resume, cancel, multi-step
   undo, and execution budgets.
@@ -44,6 +45,12 @@ breadth.
   install/uninstall, and validation.
 - **Backup/restore**: checksummed versioned bundles, secret redaction, verify,
   merge or replace restore.
+- **Secrets**: optional AES-256-GCM + scrypt vault with a `0600` master key,
+  and `secret:` references for MCP environment variables.
+- **E2EE file sync**: passphrase-encrypted bundles, verify and import; secrets
+  stay device-local.
+- **Daythread Bench v0**: memory insert/search, proactivity, runtime plans, and
+  safety checks in a throwaway home.
 - **Local HTTP API**: bearer auth, rate limits, request IDs, pagination,
   OpenAPI document, facts, runs, approvals, candidates, notifications,
   connectors, models, ask, and metrics. Binds `127.0.0.1` only.
@@ -61,6 +68,7 @@ python3 -m daythread demo
 python3 -m daythread ask "what should I focus on?"
 python3 -m daythread tick --job morning
 python3 -m daythread notifications
+python3 -m daythread bench
 make test
 ```
 
@@ -68,6 +76,8 @@ Install the `dt` command:
 
 ```bash
 python3 -m pip install -e .
+# optional encryption/sync support:
+python3 -m pip install -e ".[crypto]"
 dt doctor
 ```
 
@@ -105,6 +115,10 @@ dt notifications | scheduler list
 
 dt connector list|connect|disconnect|sync|items
 dt skill list|show|install|run|uninstall
+
+dt secret set <name> | list | rm
+dt sync export|import|verify [--passphrase-env DAYTHREAD_PASSPHRASE]
+dt bench [--facts N] [--runs N]
 
 dt config show|set
 dt metrics | audit | export [--format md|json]
@@ -160,6 +174,14 @@ dt backup
 dt restore ~/.daythread/backups/daythread-*.json --verify
 dt restore ~/.daythread/backups/daythread-*.json
 
+# Encrypted secrets and E2EE file sync.
+dt secret set OPENAI_KEY            # prompts on a TTY, or pipe stdin
+dt sync export
+DAYTHREAD_PASSPHRASE=... dt sync import ~/.daythread/sync/daythread-sync-*.json --verify
+
+# Benchmark the local core.
+dt bench --facts 500 --runs 50
+
 # Local API.
 dt serve --print-token
 dt serve --port 8765
@@ -182,12 +204,15 @@ CLI (dt) / HTTP API
        ├─ models.py      provider routing, cache, budgets, usage
        ├─ scheduler.py   anchored ticks, notifications, maintenance
        ├─ backup.py      checksummed backup/restore
+       ├─ crypto.py      optional AES-GCM/scrypt + encrypted secret vault
+       ├─ sync.py        passphrase-encrypted E2EE file sync
+       ├─ bench.py       Daythread Bench v0
        └─ skills.py      declarative, validated plans
   └─ brief.py            morning / evening briefs
   └─ export.py           JSON / Markdown export
   └─ obs.py              audit log, metrics, structured logging
   └─ server.py           local-only API: auth, rate limits, pagination
-  └─ migrations.py       forward-only schema migrations (v3)
+  └─ migrations.py       forward-only schema migrations (v4)
   └─ errors.py           domain errors with stable HTTP codes
 ```
 
@@ -236,6 +261,10 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **Local API**: `127.0.0.1` only, bearer token in a `0600` file, rate limited,
   no CORS.
 - **Backups**: checksummed, versioned, and redact known secrets.
+- **Secrets**: encrypted with AES-GCM; the master key is `0600` and never
+  leaves the device. `secret:` references keep literals out of MCP configs.
+- **E2EE sync**: bundles are authenticated with AES-GCM; secrets are excluded
+  from sync by design.
 
 See [`SECURITY.md`](SECURITY.md) for reporting and scope.
 
@@ -255,10 +284,10 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 
 ## Roadmap
 
-1. Real OAuth connectors with a token vault and contract tests.
-2. End-to-end encrypted multi-device sync.
+1. Real OAuth connectors with contract tests and a review program.
+2. E2EE multi-device transport (the file-based bundle is available today).
 3. Rust daemon + Tauri desktop shell, ported from this reference.
-4. Daythread Bench harness (memory, proactivity, execution, safety).
+4. Expand Daythread Bench into a public, reproducible benchmark suite.
 5. Hosted deployment, observability backend, and compliance program.
 
 ## License

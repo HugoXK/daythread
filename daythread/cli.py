@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import shlex
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,8 +16,10 @@ from typing import Any, Dict, List, Optional
 from . import (
     __version__,
     backup,
+    bench,
     brief,
     connectors,
+    crypto,
     export,
     mcp,
     memory,
@@ -28,7 +32,9 @@ from . import (
     runtime,
     scheduler,
     skills,
+    sync,
 )
+from .crypto import SecretVault
 from .db import connect, init_db, is_initialized, set_setting
 from .errors import DaythreadError
 from .ledger import get_steps, verify_run
@@ -279,10 +285,37 @@ def build_parser() -> argparse.ArgumentParser:
     backup_p = sub.add_parser("backup", help="create a checksummed local backup")
     backup_p.add_argument("--out", default=None)
 
+    bench_p = sub.add_parser("bench", help="run Daythread Bench v0 in a temp home")
+    bench_p.add_argument("--facts", type=int, default=300)
+    bench_p.add_argument("--runs", type=int, default=20)
+
     restore = sub.add_parser("restore", help="restore or verify a backup")
     restore.add_argument("path")
     restore.add_argument("--replace", action="store_true")
     restore.add_argument("--verify", action="store_true")
+
+
+    secret = sub.add_parser("secret", help="encrypted local secret vault")
+    secret_sub = secret.add_subparsers(dest="secret_cmd", required=True)
+    secret_sub.add_parser("list", help="list secret names")
+    secret_set = secret_sub.add_parser("set", help="set a secret")
+    secret_set.add_argument("name")
+    secret_set.add_argument("--value", default=None, help="insecure: prefer stdin or a TTY prompt")
+    secret_rm = secret_sub.add_parser("rm", help="delete a secret")
+    secret_rm.add_argument("name")
+
+    sync_p = sub.add_parser("sync", help="passphrase-encrypted file sync")
+    sync_sub = sync_p.add_subparsers(dest="sync_cmd", required=True)
+    sync_export = sync_sub.add_parser("export", help="export an encrypted sync bundle")
+    sync_export.add_argument("--out", default=None)
+    sync_import = sync_sub.add_parser("import", help="import an encrypted sync bundle")
+    sync_import.add_argument("path")
+    sync_import.add_argument("--replace", action="store_true")
+    sync_verify = sync_sub.add_parser("verify", help="verify an encrypted sync bundle")
+    sync_verify.add_argument("path")
+    for command in (sync_export, sync_import, sync_verify):
+        command.add_argument("--passphrase", default=None)
+        command.add_argument("--passphrase-env", default="DAYTHREAD_PASSPHRASE")
 
     serve.add_argument("--print-token", action="store_true")
     serve.add_argument("--rotate-token", action="store_true")
@@ -448,6 +481,8 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                         item["started_at"], item["job"], item["status"], item["scheduled_for"]
                     )
                 )
+    elif cmd == "bench":
+        _bench(args)
     elif cmd == "backup":
         path = backup.create_backup(
             conn, home, Path(args.out).expanduser() if args.out else None
@@ -470,6 +505,10 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
             _print_json(counts) if args.as_json else print(
                 "restored: {}".format(json.dumps(counts, sort_keys=True))
             )
+    elif cmd == "secret":
+        _secret(args, conn, home)
+    elif cmd == "sync":
+        _sync(args, conn, home)
     elif cmd == "serve":
         _serve(args, home, db_path)
     else:
@@ -993,6 +1032,91 @@ def _doctor(conn, home: Path, db_path: Path) -> None:
     print("api_token:   {}".format((home / "api_token").exists()))
     print("policy:      {}".format(json.dumps(policy.load_policy(conn), sort_keys=True)))
     print("counts:      {}".format(json.dumps(counts, sort_keys=True)))
+
+
+def _bench(args: argparse.Namespace) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        conn = connect(home / "db.sqlite")
+        try:
+            init_db(conn)
+            results = bench.run(conn, home, facts=args.facts, runs=args.runs)
+        finally:
+            conn.close()
+    if args.as_json:
+        _print_json(results)
+        return
+    print("Daythread Bench v0")
+    for key in sorted(results):
+        print("  {:<36} {}".format(key, results[key]))
+
+
+def _secret(args: argparse.Namespace, conn, home: Path) -> None:
+    vault = SecretVault(conn, home)
+    if args.secret_cmd == "list":
+        names = vault.names()
+        if args.as_json:
+            _print_json(names)
+        else:
+            if not names:
+                print("no secrets")
+            for name in names:
+                print(name)
+    elif args.secret_cmd == "set":
+        value = args.value
+        if value is None:
+            if sys.stdin.isatty():
+                value = getpass.getpass("secret value: ")
+            else:
+                value = sys.stdin.read().strip()
+        if not value:
+            raise ValueError("secret value is empty")
+        vault.set(args.name, value)
+        print("stored secret {}".format(args.name))
+    elif args.secret_cmd == "rm":
+        vault.delete(args.name)
+        print("removed secret {}".format(args.name))
+
+
+def _passphrase(args: argparse.Namespace) -> str:
+    if args.passphrase:
+        return args.passphrase
+    value = os.environ.get(args.passphrase_env)
+    if value:
+        return value
+    if sys.stdin.isatty():
+        return getpass.getpass("passphrase: ")
+    raise ValueError(
+        "passphrase required (set {} or pass --passphrase)".format(args.passphrase_env)
+    )
+
+
+def _sync(args: argparse.Namespace, conn, home: Path) -> None:
+    passphrase = _passphrase(args)
+    if args.sync_cmd == "export":
+        path = sync.export_sync(
+            conn,
+            home,
+            passphrase,
+            Path(args.out).expanduser() if args.out else None,
+        )
+        _print_json({"path": str(path)}) if args.as_json else print(
+            "sync bundle written to {}".format(path)
+        )
+    elif args.sync_cmd == "import":
+        counts = sync.import_sync(
+            conn, Path(args.path).expanduser(), passphrase, replace=args.replace
+        )
+        _print_json(counts) if args.as_json else print(
+            "imported: {}".format(json.dumps(counts, sort_keys=True))
+        )
+    elif args.sync_cmd == "verify":
+        info = sync.verify_sync(Path(args.path).expanduser(), passphrase)
+        _print_json(info) if args.as_json else print(
+            "sync OK: {} ({} fact(s), schema v{})".format(
+                info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
+            )
+        )
 
 
 def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:

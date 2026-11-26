@@ -230,12 +230,16 @@ def call(
 
 def _client(conn, server: Dict[str, Any], cwd: Optional[Path]) -> McpStdioClient:
     timeout = float(get_setting(conn, "mcp.timeout_seconds", str(DEFAULT_TIMEOUT)) or DEFAULT_TIMEOUT)
-    env = _resolve_env(server.get("env") or {})
+    env = _resolve_env(conn, server.get("env") or {}, cwd)
     command = [str(server["command"])] + [str(item) for item in server.get("args", [])]
     return McpStdioClient(command, env=env, cwd=cwd, timeout=timeout)
 
 
-def _resolve_env(env: Dict[str, str]) -> Dict[str, str]:
+def _resolve_env(
+    conn,
+    env: Dict[str, str],
+    cwd: Optional[Path],
+) -> Dict[str, str]:
     resolved: Dict[str, str] = {}
     for key, value in env.items():
         if isinstance(value, str) and value.startswith("env:"):
@@ -245,6 +249,11 @@ def _resolve_env(env: Dict[str, str]) -> Dict[str, str]:
                     "environment variable {} is not set for MCP server".format(variable)
                 )
             resolved[str(key)] = os.environ[variable]
+        elif isinstance(value, str) and value.startswith("secret:"):
+            from .crypto import SecretVault
+
+            home = Path(cwd) if cwd else Path.home()
+            resolved[str(key)] = SecretVault(conn, home).get(value[len("secret:"):])
         else:
             resolved[str(key)] = str(value)
     return resolved

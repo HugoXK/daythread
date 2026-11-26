@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 — security, sync, and evaluation
+
+- Schema v4: encrypted `secrets` table and FTS5 `facts_fts` with external-content
+  triggers and automatic rebuild.
+- Memory search uses FTS5 ranking with a LIKE fallback when FTS is unavailable.
+- Optional `cryptography` extra: AES-256-GCM + scrypt, local master key with
+  `0600`, encrypted `SecretVault`, and `secret:` references for MCP env.
+- E2EE file sync: passphrase-encrypted bundles, verify and merge/replace import;
+  secrets remain device-local and are not synced.
+- Daythread Bench v0: memory insert/search, proactivity, runtime plans, and
+  safety checks in a throwaway home.
+- CLI: `secret`, `sync export|import|verify`, `bench`.
+- 122 unit tests.
+
 ## 0.3.0 — agent infrastructure
 
 - Schema v3: model usage/cache, MCP servers, notifications, scheduler runs,

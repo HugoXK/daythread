@@ -39,13 +39,7 @@ TABLES = (
 SENSITIVE_SETTING_MARKERS = ("token", "secret", "password", "api_key", "cookie")
 
 
-def create_backup(
-    conn: sqlite3.Connection,
-    home: Path,
-    out_dir: Optional[Path] = None,
-) -> Path:
-    directory = Path(out_dir) if out_dir else Path(home) / "backups"
-    directory.mkdir(parents=True, exist_ok=True)
+def build_payload(conn: sqlite3.Connection) -> Dict[str, Any]:
     tables: Dict[str, List[Dict[str, Any]]] = {}
     for table in TABLES:
         rows = [row_to_dict(row) for row in conn.execute("SELECT * FROM {}".format(table))]
@@ -58,14 +52,23 @@ def create_backup(
             for row in rows:
                 row["env"] = _redact_env(row.get("env", "{}"))
         tables[table] = rows
-
-    data = {
+    return {
         "format": FORMAT,
         "schema_version": migrations.current_version(conn),
         "created_at": utc_now(),
         "tables": tables,
         "counts": {name: len(rows) for name, rows in tables.items()},
     }
+
+
+def create_backup(
+    conn: sqlite3.Connection,
+    home: Path,
+    out_dir: Optional[Path] = None,
+) -> Path:
+    directory = Path(out_dir) if out_dir else Path(home) / "backups"
+    directory.mkdir(parents=True, exist_ok=True)
+    data = build_payload(conn)
     checksum = _checksum(data)
     bundle = {"format": FORMAT, "checksum": checksum, "data": data}
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -101,7 +104,18 @@ def restore_backup(
     path: Path,
     replace: bool = False,
 ) -> Dict[str, int]:
-    data = load_backup(path)
+    return restore_payload(conn, load_backup(path), replace=replace)
+
+
+def restore_payload(
+    conn: sqlite3.Connection,
+    data: Dict[str, Any],
+    replace: bool = False,
+) -> Dict[str, int]:
+    if data.get("format") != FORMAT:
+        raise BackupError("invalid backup payload")
+    if int(data.get("schema_version", 0)) > migrations.LATEST_VERSION:
+        raise BackupError("backup was created by a newer schema")
     tables = data.get("tables", {})
     counts: Dict[str, int] = {}
     statement = "INSERT OR REPLACE" if replace else "INSERT OR IGNORE"
@@ -115,7 +129,7 @@ def restore_backup(
             rows = [_restore_env(row) for row in rows]
         counts[table] = _insert_rows(conn, table, rows, statement)
     conn.commit()
-    obs.audit(conn, "backup.restored", actor="user", target=str(path), detail=counts)
+    obs.audit(conn, "backup.restored", actor="user", target=data.get("created_at"), detail=counts)
     return counts
 
 
@@ -174,7 +188,9 @@ def _redact_env(raw: str) -> str:
         return "{}"
     redacted = {}
     for key, value in env.items():
-        if isinstance(value, str) and value.startswith("env:"):
+        if isinstance(value, str) and (
+            value.startswith("env:") or value.startswith("secret:")
+        ):
             redacted[key] = value
         else:
             redacted[key] = "[REDACTED]"

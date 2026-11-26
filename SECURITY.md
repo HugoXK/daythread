@@ -43,6 +43,9 @@ The baseline is designed to preserve these invariants:
 - MCP servers are explicitly registered, executed without a shell, and tool
   calls default to the `external` risk tier.
 - Backups are checksummed and redact known secrets before writing.
+- Secrets are encrypted with AES-256-GCM; the master key is `0600` and stays on
+  the device. E2EE sync bundles are authenticated with AES-GCM and exclude
+  device-local secrets.
 - No credentials or telemetry are collected.
 
 ## Out of scope
@@ -51,6 +54,7 @@ The baseline is designed to preserve these invariants:
 - Prompt-injection, model, and real OAuth connector issues (not implemented in
   v0.2; mock connectors only).
 - Denial of service against a local single-user process.
+- Loss of the `master.key` file (encrypted secrets cannot be recovered).
 
 ## Hardening notes
 

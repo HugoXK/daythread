@@ -7,6 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+from daythread import crypto
 from daythread.cli import main
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_echo_server.py"
@@ -104,6 +105,36 @@ class CliV3Test(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertNotEqual(first.strip(), second.strip())
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_secret_and_sync(self):
+        code, out, _ = run_cli(
+            ["--home", self.home, "secret", "set", "token", "--value", "abc"]
+        )
+        self.assertEqual(code, 0)
+        code, out, _ = run_cli(["--home", self.home, "secret", "list"])
+        self.assertEqual(code, 0)
+        self.assertIn("token", out)
+
+        code, out, _ = run_cli(
+            ["--home", self.home, "sync", "export", "--passphrase", "pw"]
+        )
+        self.assertEqual(code, 0)
+        path = out.strip().split("sync bundle written to ")[-1]
+        self.assertTrue(Path(path).exists())
+        code, out, _ = run_cli(
+            ["--home", self.home, "sync", "verify", path, "--passphrase", "pw"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("sync OK", out)
+
+        new_home = Path(self.home) / "synced"
+        code, out, _ = run_cli(
+            ["--home", str(new_home), "sync", "import", path, "--passphrase", "pw"]
+        )
+        self.assertEqual(code, 0)
+        code, out, _ = run_cli(["--home", str(new_home), "secret", "list"])
+        self.assertIn("no secrets", out)
 
     def test_daemon_single_tick(self):
         code, out, _ = run_cli(["--home", self.home, "daemon", "--max-ticks", "1"])

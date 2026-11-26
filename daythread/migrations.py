@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_VERSION = 3
+LATEST_VERSION = 4
 
 
 def current_version(conn: sqlite3.Connection) -> int:
@@ -33,6 +33,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '3')")
         conn.commit()
         version = 3
+    if version < 4:
+        _migrate_v4(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '4')")
+        conn.commit()
+        version = 4
     return version
 
 
@@ -280,3 +285,44 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
             ON signals(processed, ts);
         """
     )
+
+
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS secrets (
+            name       TEXT PRIMARY KEY,
+            nonce      TEXT NOT NULL,
+            ciphertext TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    try:
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+                subject_id, predicate, object, tags,
+                content='facts', content_rowid='rowid'
+            );
+            CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+                INSERT INTO facts_fts(rowid, subject_id, predicate, object, tags)
+                VALUES (new.rowid, new.subject_id, new.predicate, new.object, new.tags);
+            END;
+            CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+                INSERT INTO facts_fts(facts_fts, rowid, subject_id, predicate, object, tags)
+                VALUES ('delete', old.rowid, old.subject_id, old.predicate, old.object, old.tags);
+            END;
+            CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+                INSERT INTO facts_fts(facts_fts, rowid, subject_id, predicate, object, tags)
+                VALUES ('delete', old.rowid, old.subject_id, old.predicate, old.object, old.tags);
+                INSERT INTO facts_fts(rowid, subject_id, predicate, object, tags)
+                VALUES (new.rowid, new.subject_id, new.predicate, new.object, new.tags);
+            END;
+            INSERT INTO facts_fts(facts_fts) VALUES('rebuild');
+            """
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        conn.rollback()

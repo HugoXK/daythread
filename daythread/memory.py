@@ -289,6 +289,22 @@ def history(conn: sqlite3.Connection, fact_id: str) -> List[Dict[str, Any]]:
 def search_facts(conn: sqlite3.Connection, query: str) -> List[Dict[str, Any]]:
     if not query.strip():
         return []
+    if _fts_available(conn):
+        try:
+            rows = conn.execute(
+                """
+                SELECT f.* FROM facts f
+                JOIN facts_fts ON facts_fts.rowid = f.rowid
+                WHERE facts_fts MATCH ?
+                  AND f.deleted_at IS NULL AND f.superseded_by IS NULL
+                ORDER BY bm25(facts_fts) LIMIT 50
+                """,
+                (_fts_query(query),),
+            ).fetchall()
+            if rows:
+                return [_row_to_fact(row) for row in rows]
+        except sqlite3.OperationalError:
+            pass
     like = "%{}%".format(query.strip())
     rows = conn.execute(
         """
@@ -300,6 +316,17 @@ def search_facts(conn: sqlite3.Connection, query: str) -> List[Dict[str, Any]]:
         (like, like, like, like),
     ).fetchall()
     return [_row_to_fact(row) for row in rows]
+
+
+def _fts_available(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'facts_fts'"
+    ).fetchone()
+    return row is not None
+
+
+def _fts_query(query: str) -> str:
+    return '"{}"'.format(query.replace('"', '""'))
 
 
 def recent_facts(conn: sqlite3.Connection, limit: int = 5) -> List[Dict[str, Any]]:
