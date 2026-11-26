@@ -229,9 +229,10 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> Dict[str, Any]:
     return run
 
 
-def list_runs(conn: sqlite3.Connection, limit: int = 20) -> List[Dict[str, Any]]:
+def list_runs(conn: sqlite3.Connection, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        "SELECT * FROM runs ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (max(int(limit), 0), max(int(offset), 0)),
     ).fetchall()
     runs = []
     for row in rows:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_VERSION = 2
+LATEST_VERSION = 3
 
 
 def current_version(conn: sqlite3.Connection) -> int:
@@ -28,6 +28,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '2')")
         conn.commit()
         version = 2
+    if version < 3:
+        _migrate_v3(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '3')")
+        conn.commit()
+        version = 3
     return version
 
 
@@ -201,5 +206,77 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_idempotency
             ON runs(idempotency_key)
             WHERE idempotency_key IS NOT NULL;
+        """
+    )
+
+
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS model_usage (
+            id                TEXT PRIMARY KEY,
+            ts                TEXT NOT NULL,
+            provider          TEXT NOT NULL,
+            model             TEXT NOT NULL,
+            task              TEXT NOT NULL,
+            prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            latency_ms        REAL NOT NULL DEFAULT 0,
+            ok                INTEGER NOT NULL DEFAULT 1,
+            cached            INTEGER NOT NULL DEFAULT 0,
+            error             TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_model_usage_ts ON model_usage(ts);
+
+        CREATE TABLE IF NOT EXISTS model_cache (
+            key        TEXT PRIMARY KEY,
+            provider   TEXT NOT NULL,
+            model      TEXT NOT NULL,
+            response   TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+            id         TEXT PRIMARY KEY,
+            command    TEXT NOT NULL,
+            args       TEXT NOT NULL DEFAULT '[]',
+            env        TEXT NOT NULL DEFAULT '{}',
+            status     TEXT NOT NULL DEFAULT 'configured',
+            created_at TEXT NOT NULL,
+            last_error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS notifications (
+            id           TEXT PRIMARY KEY,
+            ts           TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            title        TEXT NOT NULL,
+            body         TEXT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'queued',
+            delivered_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status, ts);
+
+        CREATE TABLE IF NOT EXISTS scheduler_runs (
+            id            TEXT PRIMARY KEY,
+            job           TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            started_at    TEXT NOT NULL,
+            finished_at   TEXT,
+            status        TEXT NOT NULL,
+            detail        TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(job, scheduled_for)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_facts_active
+            ON facts(deleted_at, superseded_by, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_runs_state
+            ON runs(state, created_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
+        CREATE INDEX IF NOT EXISTS idx_candidates_score
+            ON candidates(status, score);
+        CREATE INDEX IF NOT EXISTS idx_signals_processed
+            ON signals(processed, ts);
         """
     )

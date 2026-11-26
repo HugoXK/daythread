@@ -133,6 +133,8 @@ def list_facts(
     subject_id: Optional[str] = None,
     include_deleted: bool = False,
     include_superseded: bool = False,
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> List[Dict[str, Any]]:
     clauses = []
     params: List[Any] = []
@@ -147,9 +149,11 @@ def list_facts(
     if not include_superseded:
         clauses.append("superseded_by IS NULL")
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    rows = conn.execute(
-        "SELECT * FROM facts{} ORDER BY updated_at DESC".format(where), params
-    ).fetchall()
+    sql = "SELECT * FROM facts{} ORDER BY updated_at DESC".format(where)
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = list(params) + [max(int(limit), 0), max(int(offset), 0)]
+    rows = conn.execute(sql, params).fetchall()
     return [_row_to_fact(row) for row in rows]
 
 

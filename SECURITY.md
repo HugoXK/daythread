@@ -39,7 +39,10 @@ The baseline is designed to preserve these invariants:
 - Shell execution is allowlisted, path-restricted, timeout-bounded, and gated by
   the `destructive` policy tier.
 - The local API rejects unauthenticated requests, uses constant-time token
-  comparison, and serves no CORS headers.
+  comparison, enforces per-token rate limits, and serves no CORS headers.
+- MCP servers are explicitly registered, executed without a shell, and tool
+  calls default to the `external` risk tier.
+- Backups are checksummed and redact known secrets before writing.
 - No credentials or telemetry are collected.
 
 ## Out of scope

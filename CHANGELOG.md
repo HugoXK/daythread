@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 — agent infrastructure
+
+- Schema v3: model usage/cache, MCP servers, notifications, scheduler runs,
+  and query indexes.
+- Model gateway: pluggable providers, `local.echo`, OpenAI-compatible HTTP
+  provider, fallback chain, response cache, daily token budget, usage ledger.
+- MCP: minimal JSON-RPC 2.0 stdio client, server registry, tool discovery,
+  `mcp.call` through the approval gate, and a fixture server test.
+- Scheduler: idempotent `morning`/`evening`/`maintenance` ticks, notification
+  outbox, quiet-hour deferral, `daemon` loop.
+- Backup/restore: checksummed versioned bundles, secret redaction, verify and
+  merge/replace restore.
+- API hardening: request IDs, per-token rate limiting, pagination,
+  OpenAPI document, model/tick/notification endpoints.
+- Domain errors with stable HTTP codes.
+- CLI: `ask`, `model`, `mcp`, `tick`, `daemon`, `notifications`, `scheduler`,
+  `backup`, `restore`, `serve --rotate-token`.
+- 108 unit tests.
+
 ## 0.2.0 — industrial baseline
 
 - Schema v2 with forward-only migrations.

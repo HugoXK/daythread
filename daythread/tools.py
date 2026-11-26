@@ -409,6 +409,28 @@ def connector_sync(ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
     )
 
 
+def mcp_call(ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
+    from . import mcp
+
+    server = str(args.get("server", "")).strip()
+    tool = str(args.get("tool", "")).strip()
+    if not server or not tool:
+        raise ValueError("server and tool are required")
+    arguments = args.get("arguments") or {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            raise ValueError("arguments must be a JSON object")
+    if not isinstance(arguments, dict):
+        raise ValueError("arguments must be a JSON object")
+    result = mcp.call(ctx.conn, server, tool, arguments, cwd=ctx.home)
+    return ToolResult(
+        summary="called MCP {}.{}".format(server, tool),
+        data={"server": server, "tool": tool, "result": result},
+    )
+
+
 def shell_run(ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
     command = str(args.get("command", "")).strip()
     if not command:
@@ -462,6 +484,7 @@ TOOLS: Dict[str, ToolSpec] = {
     "memory.search": ToolSpec("memory.search", "read", "Search memory facts.", memory_search, "memory.read"),
     "brief.generate": ToolSpec("brief.generate", "read", "Generate a morning or evening brief.", brief_generate, "brief.read"),
     "connector.sync": ToolSpec("connector.sync", "write", "Sync a connected connector into local state.", connector_sync, "connectors.sync"),
+    "mcp.call": ToolSpec("mcp.call", "external", "Call a configured MCP server tool.", mcp_call, "mcp.call", idempotent=False),
     "shell.run": ToolSpec("shell.run", "destructive", "Run an allowlisted command in the local sandbox.", shell_run, "shell.exec", idempotent=False),
 }
 

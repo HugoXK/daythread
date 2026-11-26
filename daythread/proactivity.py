@@ -210,11 +210,11 @@ def generate_candidates(
 
 
 def list_candidates(
-    conn: sqlite3.Connection, status: str = "new", limit: int = 20
+    conn: sqlite3.Connection, status: str = "new", limit: int = 20, offset: int = 0
 ) -> List[Dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM candidates WHERE status = ? ORDER BY score DESC LIMIT ?",
-        (status, limit),
+        "SELECT * FROM candidates WHERE status = ? ORDER BY score DESC LIMIT ? OFFSET ?",
+        (status, max(int(limit), 0), max(int(offset), 0)),
     ).fetchall()
     items = []
     for row in rows:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,19 +13,24 @@ from typing import Any, Dict, List, Optional
 
 from . import (
     __version__,
+    backup,
     brief,
     connectors,
     export,
+    mcp,
     memory,
     migrations,
+    models,
     obs,
     planner,
     policy,
     proactivity,
     runtime,
+    scheduler,
     skills,
 )
 from .db import connect, init_db, is_initialized, set_setting
+from .errors import DaythreadError
 from .ledger import get_steps, verify_run
 from .server import ApiServer, ensure_token
 
@@ -226,7 +232,60 @@ def build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="start the local HTTP API")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
+
+    ask = sub.add_parser("ask", help="ask the configured model provider")
+    ask.add_argument("text")
+    ask.add_argument("--task", default="chat")
+    ask.add_argument("--no-cache", action="store_true")
+
+    model = sub.add_parser("model", help="model gateway configuration and usage")
+    model_sub = model.add_subparsers(dest="model_cmd", required=True)
+    model_sub.add_parser("list", help="show model config")
+    model_usage = model_sub.add_parser("usage", help="show recent model usage")
+    model_usage.add_argument("--limit", type=int, default=20)
+
+    mcp_p = sub.add_parser("mcp", help="manage MCP stdio servers")
+    mcp_sub = mcp_p.add_subparsers(dest="mcp_cmd", required=True)
+    mcp_add = mcp_sub.add_parser("add", help="register an MCP server")
+    mcp_add.add_argument("id")
+    mcp_add.add_argument("--command", required=True, help="command line, e.g. 'python3 server.py'")
+    mcp_add.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    mcp_sub.add_parser("list", help="list MCP servers")
+    mcp_remove = mcp_sub.add_parser("remove", help="remove an MCP server")
+    mcp_remove.add_argument("id")
+    mcp_tools = mcp_sub.add_parser("tools", help="list tools exposed by a server")
+    mcp_tools.add_argument("id")
+    mcp_call = mcp_sub.add_parser("call", help="propose an MCP tool call")
+    mcp_call.add_argument("id")
+    mcp_call.add_argument("tool")
+    mcp_call.add_argument("--intent", default=None)
+    mcp_call.add_argument("--arg", action="append", default=[], metavar="KEY=VALUE")
+
+    tick = sub.add_parser("tick", help="run one scheduler job")
+    tick.add_argument("--job", choices=scheduler.JOBS, default=None)
+
+    daemon = sub.add_parser("daemon", help="run the scheduler loop")
+    daemon.add_argument("--interval", type=int, default=60)
+    daemon.add_argument("--max-ticks", type=int, default=None)
+
+    notifications = sub.add_parser("notifications", help="list scheduler notifications")
+    notifications.add_argument("--limit", type=int, default=50)
+
+    sched = sub.add_parser("scheduler", help="inspect scheduler runs")
+    sched_sub = sched.add_subparsers(dest="scheduler_cmd", required=True)
+    sched_list = sched_sub.add_parser("list", help="list scheduler runs")
+    sched_list.add_argument("--limit", type=int, default=20)
+
+    backup_p = sub.add_parser("backup", help="create a checksummed local backup")
+    backup_p.add_argument("--out", default=None)
+
+    restore = sub.add_parser("restore", help="restore or verify a backup")
+    restore.add_argument("path")
+    restore.add_argument("--replace", action="store_true")
+    restore.add_argument("--verify", action="store_true")
+
     serve.add_argument("--print-token", action="store_true")
+    serve.add_argument("--rotate-token", action="store_true")
 
     return parser
 
@@ -243,7 +302,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not is_initialized(conn):
             init_db(conn)
         _dispatch(args, conn, home, db_path)
-    except (KeyError, ValueError) as exc:
+    except (DaythreadError, KeyError, ValueError) as exc:
         print("error: {}".format(exc), file=sys.stderr)
         return 1
     finally:
@@ -346,6 +405,71 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                 )
     elif cmd == "export":
         _export(args, conn)
+    elif cmd == "ask":
+        response = models.ask(
+            conn, args.text, task=args.task, use_cache=not args.no_cache
+        )
+        if args.as_json:
+            _print_json(response.to_dict())
+        else:
+            print(response.text)
+    elif cmd == "model":
+        _model(args, conn)
+    elif cmd == "mcp":
+        _mcp(args, conn, home)
+    elif cmd == "tick":
+        result = scheduler.tick(conn, home, job=args.job)
+        _tick_result(result, args.as_json)
+    elif cmd == "daemon":
+        try:
+            scheduler.daemon(home, db_path, interval=args.interval, max_ticks=args.max_ticks)
+        except KeyboardInterrupt:
+            pass
+        print("daemon stopped")
+    elif cmd == "notifications":
+        items = scheduler.list_notifications(conn, limit=args.limit)
+        if args.as_json:
+            _print_json(items)
+        else:
+            for item in items:
+                print(
+                    "{}  {:<10} {:<10} {}".format(
+                        item["ts"], item["status"], item["kind"], item["title"]
+                    )
+                )
+    elif cmd == "scheduler":
+        items = scheduler.list_scheduler_runs(conn, limit=args.limit)
+        if args.as_json:
+            _print_json(items)
+        else:
+            for item in items:
+                print(
+                    "{}  {:<12} {:<10} {}".format(
+                        item["started_at"], item["job"], item["status"], item["scheduled_for"]
+                    )
+                )
+    elif cmd == "backup":
+        path = backup.create_backup(
+            conn, home, Path(args.out).expanduser() if args.out else None
+        )
+        if args.as_json:
+            _print_json({"path": str(path)})
+        else:
+            print("backup written to {}".format(path))
+    elif cmd == "restore":
+        path = Path(args.path).expanduser()
+        if args.verify:
+            info = backup.verify_backup(path)
+            _print_json(info) if args.as_json else print(
+                "backup OK: {} ({} fact(s), schema v{})".format(
+                    info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
+                )
+            )
+        else:
+            counts = backup.restore_backup(conn, path, replace=args.replace)
+            _print_json(counts) if args.as_json else print(
+                "restored: {}".format(json.dumps(counts, sort_keys=True))
+            )
     elif cmd == "serve":
         _serve(args, home, db_path)
     else:
@@ -713,6 +837,108 @@ def _skill(args: argparse.Namespace, conn, home: Path) -> None:
         print("uninstalled {}".format(args.id))
 
 
+def _model(args: argparse.Namespace, conn) -> None:
+    if args.model_cmd == "list":
+        data = models.list_models(conn)
+        if args.as_json:
+            _print_json(data)
+            return
+        config = data["config"]
+        print("provider:      {}".format(config["provider"]))
+        print("model:         {}".format(config["model"]))
+        print("fallback:      {}".format(config["fallback"] or "-"))
+        print("base_url:      {}".format(config["base_url"]))
+        print("api_key_ref:   {}".format(config["api_key_ref"]))
+        print("daily_budget:  {}".format(config["daily_token_budget"] or "unlimited"))
+        print("usage_today:   {} token(s)".format(data["usage_today"]))
+        print("providers:     {}".format(", ".join(data["providers"])))
+    elif args.model_cmd == "usage":
+        rows = conn.execute(
+            "SELECT * FROM model_usage ORDER BY ts DESC LIMIT ?", (args.limit,)
+        ).fetchall()
+        items = [dict(row) for row in rows]
+        if args.as_json:
+            _print_json(items)
+        else:
+            if not items:
+                print("no model usage")
+            for item in items:
+                print(
+                    "{}  {:<18} {:<12} task={:<10} tokens={}/{} cached={} ok={}".format(
+                        item["ts"],
+                        item["provider"],
+                        item["model"],
+                        item["task"],
+                        item["prompt_tokens"],
+                        item["completion_tokens"],
+                        item["cached"],
+                        item["ok"],
+                    )
+                )
+
+
+def _mcp(args: argparse.Namespace, conn, home: Path) -> None:
+    if args.mcp_cmd == "add":
+        parts = shlex.split(args.command)
+        if not parts:
+            raise ValueError("command is empty")
+        env = _parse_kv(args.env)
+        server = mcp.add_server(conn, args.id, parts[0], parts[1:], env)
+        _print_json(server) if args.as_json else print("registered MCP server {}".format(server["id"]))
+    elif args.mcp_cmd == "list":
+        servers = mcp.list_servers(conn)
+        if args.as_json:
+            _print_json(servers)
+        else:
+            if not servers:
+                print("no MCP servers")
+            for server in servers:
+                print(
+                    "{:<14} {:<12} {} {}".format(
+                        server["id"],
+                        server["status"],
+                        server["command"],
+                        " ".join(server["args"]),
+                    )
+                )
+    elif args.mcp_cmd == "remove":
+        mcp.remove_server(conn, args.id)
+        print("removed MCP server {}".format(args.id))
+    elif args.mcp_cmd == "tools":
+        tools = mcp.server_tools(conn, args.id, cwd=home)
+        if args.as_json:
+            _print_json(tools)
+        else:
+            for tool in tools:
+                print("{:<20} {}".format(tool.get("name", ""), tool.get("description", "")))
+    elif args.mcp_cmd == "call":
+        arguments = _parse_kv(args.arg)
+        run = runtime.propose(
+            conn,
+            home,
+            "mcp.call",
+            {"server": args.id, "tool": args.tool, "arguments": arguments},
+            intent=args.intent or "mcp {} {}".format(args.id, args.tool),
+        )
+        _print_run(run, args.as_json)
+
+
+def _tick_result(result: Dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        _print_json(result)
+        return
+    print(
+        "{}  {:<12} {:<10} already_ran={}".format(
+            result.get("scheduled_for", ""),
+            result.get("job", ""),
+            result.get("status", ""),
+            result.get("already_ran", False),
+        )
+    )
+    if result.get("status") == "error":
+        print("  error: {}".format(result.get("error")))
+
+
 def _export(args: argparse.Namespace, conn) -> None:
     if args.format == "json":
         text = json.dumps(export.export_json(conn), ensure_ascii=False, indent=2)
@@ -747,7 +973,17 @@ def _doctor(conn, home: Path, db_path: Path) -> None:
     version = migrations.current_version(conn)
     integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
     counts = {}
-    for table in ("facts", "runs", "signals", "candidates", "connectors", "messages"):
+    for table in (
+        "facts",
+        "runs",
+        "signals",
+        "candidates",
+        "connectors",
+        "messages",
+        "notifications",
+        "model_usage",
+        "mcp_servers",
+    ):
         counts[table] = conn.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0]
     print("home:        {}".format(home))
     print("db:          {}".format(db_path))
@@ -761,9 +997,15 @@ def _doctor(conn, home: Path, db_path: Path) -> None:
 
 def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:
     if args.print_token:
-        print(ensure_token(home))
+        print(ensure_token(home, rotate=args.rotate_token))
         return
-    server = ApiServer(home, db_path, host=args.host, port=args.port)
+    server = ApiServer(
+        home,
+        db_path,
+        host=args.host,
+        port=args.port,
+        rotate_token=args.rotate_token,
+    )
     print("daythread API on http://{}:{}".format(args.host, server.port))
     print("token: {}".format(server.token))
     try:
