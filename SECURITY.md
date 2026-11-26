@@ -57,8 +57,20 @@ The baseline is designed to preserve these invariants:
   requests `Calendars.ReadWrite`, `Mail.ReadWrite`, and `Mail.Send`. Users can
   revoke access at the provider at any time.
 - The sync relay stores only opaque AES-GCM bundles, requires a bearer token,
-  writes `0600` files, and enforces a body-size limit. Run it behind TLS for
-  remote access and rotate the relay token.
+  writes `0600` files (including `devices.json`), enforces a body-size limit,
+  supports TLS, DELETE, retention, and optional per-device tokens. Rotate tokens and use TLS remotely.
+- Runs use an atomic lease and heartbeat; only one executor can claim a run.
+  Steps have timeouts on the main thread and cancellation is checked between
+  steps.
+- Backups are HMAC-signed with the device master key. Restoring a signed backup
+  on a new home requires the key or an explicit `--trust`.
+- `secret`/`health` facts are hidden from list/search/export/MCP/briefs unless
+  explicitly included. Model cache entries are encrypted with the master key.
+- The local API validates Host, uses persistent per-token rate limits, and does
+  not return internal error details.
+- MCP child processes use an executable allowlist and a scoped environment.
+- OAuth refreshes are serialized per connector; tokens can be revoked; scope
+  drift requires re-authorization.
 - No credentials or telemetry are collected.
 
 ## Out of scope
@@ -70,6 +82,10 @@ The baseline is designed to preserve these invariants:
 - Loss of the `master.key` file (encrypted secrets cannot be recovered).
 - An insecurely exposed relay or shared relay token. The relay is a self-hosted
   component; operators are responsible for TLS, network ACLs, and retention.
+- A malicious MCP server that is allowlisted and explicitly registered. The
+  allowlist is a guardrail, not an OS-level sandbox.
+- Partial side effects when a non-idempotent connector action times out. Such
+  runs require review before resume.
 
 ## Hardening notes
 

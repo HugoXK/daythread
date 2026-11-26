@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -17,6 +18,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
 
 from .crypto import SecretVault
 from .db import get_setting
@@ -101,6 +107,32 @@ class CallbackServer:
         if not self.event.wait(timeout):
             raise DaythreadError("OAuth callback timed out after {:.0f}s".format(timeout))
         return self.result or {}
+
+
+@contextlib.contextmanager
+def connector_lock(home: Path, connector_id: str):
+    directory = Path(home) / "locks"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "oauth.{}.lock".format(connector_id.replace("/", "_"))
+    handle = open(path, "a+")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def _scope_ok(required: List[str], granted: List[str]) -> bool:
+    granted_set = set(granted)
+    granted_short = {item.rsplit("/", 1)[-1] for item in granted_set}
+    for scope in required:
+        if scope in granted_set or scope.rsplit("/", 1)[-1] in granted_short:
+            continue
+        return False
+    return True
 
 
 class TokenStore:

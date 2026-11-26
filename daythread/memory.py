@@ -133,6 +133,7 @@ def list_facts(
     subject_id: Optional[str] = None,
     include_deleted: bool = False,
     include_superseded: bool = False,
+    include_sensitive: bool = False,
     limit: Optional[int] = None,
     offset: int = 0,
 ) -> List[Dict[str, Any]]:
@@ -148,6 +149,8 @@ def list_facts(
         clauses.append("deleted_at IS NULL")
     if not include_superseded:
         clauses.append("superseded_by IS NULL")
+    if not include_sensitive:
+        clauses.append("sensitivity NOT IN ('secret', 'health')")
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     sql = "SELECT * FROM facts{} ORDER BY updated_at DESC".format(where)
     if limit is not None:
@@ -286,9 +289,14 @@ def history(conn: sqlite3.Connection, fact_id: str) -> List[Dict[str, Any]]:
     return entries
 
 
-def search_facts(conn: sqlite3.Connection, query: str) -> List[Dict[str, Any]]:
+def search_facts(
+    conn: sqlite3.Connection,
+    query: str,
+    include_sensitive: bool = False,
+) -> List[Dict[str, Any]]:
     if not query.strip():
         return []
+    sensitive_clause = "" if include_sensitive else " AND f.sensitivity NOT IN ('secret', 'health')"
     if _fts_available(conn):
         try:
             rows = conn.execute(
@@ -297,8 +305,9 @@ def search_facts(conn: sqlite3.Connection, query: str) -> List[Dict[str, Any]]:
                 JOIN facts_fts ON facts_fts.rowid = f.rowid
                 WHERE facts_fts MATCH ?
                   AND f.deleted_at IS NULL AND f.superseded_by IS NULL
+                  {}
                 ORDER BY bm25(facts_fts) LIMIT 50
-                """,
+                """.format(sensitive_clause),
                 (_fts_query(query),),
             ).fetchall()
             if rows:
@@ -311,8 +320,9 @@ def search_facts(conn: sqlite3.Connection, query: str) -> List[Dict[str, Any]]:
         SELECT * FROM facts
         WHERE deleted_at IS NULL AND superseded_by IS NULL
           AND (subject_id LIKE ? OR predicate LIKE ? OR object LIKE ? OR tags LIKE ?)
+          {}
         ORDER BY score DESC, updated_at DESC
-        """,
+        """.format("" if include_sensitive else "AND sensitivity NOT IN ('secret', 'health')"),
         (like, like, like, like),
     ).fetchall()
     return [_row_to_fact(row) for row in rows]
@@ -329,13 +339,18 @@ def _fts_query(query: str) -> str:
     return '"{}"'.format(query.replace('"', '""'))
 
 
-def recent_facts(conn: sqlite3.Connection, limit: int = 5) -> List[Dict[str, Any]]:
+def recent_facts(
+    conn: sqlite3.Connection,
+    limit: int = 5,
+    include_sensitive: bool = False,
+) -> List[Dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT * FROM facts
         WHERE deleted_at IS NULL AND superseded_by IS NULL
+          {}
         ORDER BY updated_at DESC LIMIT ?
-        """,
+        """.format("" if include_sensitive else "AND sensitivity NOT IN ('secret', 'health')"),
         (limit,),
     ).fetchall()
     return [_row_to_fact(row) for row in rows]

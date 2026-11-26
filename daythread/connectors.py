@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -19,6 +20,9 @@ from .db import canonical, get_setting, json_load, row_to_dict, utc_now
 from .errors import ProviderError, ValidationError
 
 HTTP_OPENER: Optional[Callable[[urllib.request.Request], Any]] = None
+HTTP_RETRIES = 3
+HTTP_RETRY_BASE = 0.1
+MAX_PAGES = 5
 
 
 @dataclass
@@ -109,16 +113,26 @@ def _sync_google_calendar(
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
 ) -> List[Dict[str, Any]]:
     time_min = quote((now - timedelta(days=1)).isoformat())
-    url = (
+    base = (
         "https://www.googleapis.com/calendar/v3/calendars/primary/events"
         "?singleEvents=true&orderBy=startTime&maxResults=25&timeMin={}".format(time_min)
     )
-    data = _http_json(url, token, opener)
     items = []
-    for event in data.get("items", []):
+    page_token = None
+    for _ in range(MAX_PAGES):
+        url = base
+        if page_token:
+            url += "&pageToken={}".format(quote(page_token))
+        data = _http_json(url, token, opener)
+        items.extend(data.get("items", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    result = []
+    for event in items:
         start = (event.get("start") or {}).get("dateTime") or (event.get("start") or {}).get("date")
         end = (event.get("end") or {}).get("dateTime") or (event.get("end") or {}).get("date")
-        items.append(
+        result.append(
             {
                 "kind": "calendar",
                 "external_id": str(event.get("id", "")),
@@ -129,7 +143,7 @@ def _sync_google_calendar(
                 },
             }
         )
-    return items
+    return result
 
 
 def _sync_google_gmail(
@@ -137,13 +151,20 @@ def _sync_google_gmail(
     token: Optional[Dict[str, Any]],
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
 ) -> List[Dict[str, Any]]:
-    listing = _http_json(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=is%3Aunread",
-        token,
-        opener,
-    )
+    base = "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=is%3Aunread"
+    messages = []
+    page_token = None
+    for _ in range(MAX_PAGES):
+        url = base
+        if page_token:
+            url += "&pageToken={}".format(quote(page_token))
+        listing = _http_json(url, token, opener)
+        messages.extend(listing.get("messages", []))
+        page_token = listing.get("nextPageToken")
+        if not page_token:
+            break
     items = []
-    for message in listing.get("messages", [])[:10]:
+    for message in messages[:10]:
         message_id = str(message.get("id", ""))
         if not message_id:
             continue
@@ -205,21 +226,34 @@ def _http_json(
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        if opener is not None:
-            raw = opener(request)
-        elif HTTP_OPENER is not None:
-            raw = HTTP_OPENER(request)
-        else:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                raw = response.read()
-        if hasattr(raw, "read"):
-            raw = raw.read()
-        return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
-    except urllib.error.HTTPError as exc:
-        raise ProviderError("connector HTTP {}".format(exc.code))
-    except Exception as exc:  # noqa: BLE001 - normalized provider error
-        raise ProviderError("connector request failed: {}".format(exc))
+    last_error = None
+    for attempt in range(HTTP_RETRIES):
+        try:
+            if opener is not None:
+                raw = opener(request)
+            elif HTTP_OPENER is not None:
+                raw = HTTP_OPENER(request)
+            else:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    raw = response.read()
+            if hasattr(raw, "read"):
+                raw = raw.read()
+            return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code in (429, 500, 502, 503, 504) and attempt < HTTP_RETRIES - 1:
+                retry_after = 0
+                try:
+                    retry_after = float(exc.headers.get("Retry-After", "0") or 0)
+                except (AttributeError, TypeError, ValueError):
+                    retry_after = 0
+                delay = min(max(retry_after, HTTP_RETRY_BASE * (2 ** attempt)), 2.0)
+                time.sleep(delay)
+                continue
+            raise ProviderError("connector HTTP {}".format(exc.code))
+        except Exception as exc:  # noqa: BLE001 - normalized provider error
+            raise ProviderError("connector request failed: {}".format(exc))
+    raise ProviderError("connector request failed: {}".format(last_error))
 
 
 
@@ -236,24 +270,29 @@ def _sync_microsoft_calendar(
             quote(start), quote(end)
         )
     )
-    data = _http_json(
-        url, token, opener, extra_headers={"Prefer": 'outlook.timezone="UTC"'}
-    )
     items = []
-    for event in data.get("value", []):
-        start_dt = (event.get("start") or {}).get("dateTime")
-        end_dt = (event.get("end") or {}).get("dateTime")
-        items.append(
-            {
-                "kind": "calendar",
-                "external_id": str(event.get("id", "")),
-                "payload": {
-                    "title": event.get("subject") or "(untitled)",
-                    "start": start_dt,
-                    "end": end_dt,
-                },
-            }
+    next_url = url
+    for _ in range(MAX_PAGES):
+        data = _http_json(
+            next_url, token, opener, extra_headers={"Prefer": 'outlook.timezone="UTC"'}
         )
+        for event in data.get("value", []):
+            start_dt = (event.get("start") or {}).get("dateTime")
+            end_dt = (event.get("end") or {}).get("dateTime")
+            items.append(
+                {
+                    "kind": "calendar",
+                    "external_id": str(event.get("id", "")),
+                    "payload": {
+                        "title": event.get("subject") or "(untitled)",
+                        "start": start_dt,
+                        "end": end_dt,
+                    },
+                }
+            )
+        next_url = data.get("@odata.nextLink")
+        if not next_url:
+            break
     return items
 
 
@@ -267,25 +306,30 @@ def _sync_microsoft_mail(
         "?$filter=isRead%20eq%20false&$top=10"
         "&$select=id,from,subject,bodyPreview,receivedDateTime"
     )
-    data = _http_json(url, token, opener)
     items = []
-    for message in data.get("value", []):
-        sender = (
-            ((message.get("from") or {}).get("emailAddress") or {}).get("address", "")
-        )
-        items.append(
-            {
-                "kind": "message",
-                "external_id": str(message.get("id", "")),
-                "payload": {
-                    "sender": sender,
-                    "subject": message.get("subject", ""),
-                    "snippet": message.get("bodyPreview", ""),
-                    "body": message.get("bodyPreview", ""),
-                    "ts": message.get("receivedDateTime") or now.isoformat(),
-                },
-            }
-        )
+    next_url = url
+    for _ in range(MAX_PAGES):
+        data = _http_json(next_url, token, opener)
+        for message in data.get("value", []):
+            sender = (
+                ((message.get("from") or {}).get("emailAddress") or {}).get("address", "")
+            )
+            items.append(
+                {
+                    "kind": "message",
+                    "external_id": str(message.get("id", "")),
+                    "payload": {
+                        "sender": sender,
+                        "subject": message.get("subject", ""),
+                        "snippet": message.get("bodyPreview", ""),
+                        "body": message.get("bodyPreview", ""),
+                        "ts": message.get("receivedDateTime") or now.isoformat(),
+                    },
+                }
+            )
+        next_url = data.get("@odata.nextLink")
+        if not next_url:
+            break
     return items
 
 
@@ -650,20 +694,62 @@ def _get_token(
         return None
     if home is None:
         raise ValidationError("home is required for OAuth connectors")
-    from .oauth import TokenStore, ensure_token, get_oauth_config, is_expired
+    from .oauth import (
+        TokenStore,
+        connector_lock,
+        ensure_token,
+        get_oauth_config,
+        is_expired,
+    )
 
     target = connector_id or spec.id
     store = TokenStore(conn, home)
-    token = store.load(target)
-    if not token:
-        raise ValidationError(
-            "connector {} is not authorized: dt connector auth {}".format(target, target)
-        )
-    if is_expired(token):
-        config = get_oauth_config(conn, spec.oauth_provider, spec.scopes, home)
-        token = ensure_token(config, token, opener)
-        store.save(target, token)
-    return token
+    with connector_lock(home, target):
+        token = store.load(target)
+        if not token:
+            raise ValidationError(
+                "connector {} is not authorized: dt connector auth {}".format(target, target)
+            )
+        granted = token.get("scope") or token.get("scopes")
+        if granted:
+            if isinstance(granted, str):
+                granted = granted.split()
+            if not oauth_scopes_ok(spec.scopes, list(granted)):
+                raise ValidationError(
+                    "connector {} is missing scopes; re-authorize: dt connector auth {}".format(
+                        target, target
+                    )
+                )
+        if is_expired(token):
+            config = get_oauth_config(conn, spec.oauth_provider, spec.scopes, home)
+            token = ensure_token(config, token, opener)
+            store.save(target, token)
+        return token
+
+
+def oauth_scopes_ok(required, granted) -> bool:
+    granted_set = set(granted)
+    granted_short = {item.rsplit("/", 1)[-1] for item in granted_set}
+    for scope in required:
+        if scope in granted_set or scope.rsplit("/", 1)[-1] in granted_short:
+            continue
+        return False
+    return True
+
+
+def revoke(conn: sqlite3.Connection, home: Optional[Any], connector_id: str) -> Dict[str, Any]:
+    spec = get_connector(connector_id)
+    if spec.auth == "oauth2" and home is not None:
+        from .oauth import TokenStore
+
+        TokenStore(conn, home).delete(connector_id)
+    conn.execute(
+        "UPDATE connectors SET status = 'disconnected', token_ref = NULL WHERE id = ?",
+        (connector_id,),
+    )
+    conn.commit()
+    obs.audit(conn, "connector.revoked", actor="user", target=connector_id)
+    return {"id": connector_id, "status": "disconnected"}
 
 
 def call_action(

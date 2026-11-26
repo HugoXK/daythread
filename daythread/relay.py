@@ -7,7 +7,9 @@ import json
 import os
 import re
 import secrets
+import ssl
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +30,10 @@ class RelayServer:
         token: Optional[str] = None,
         host: str = "127.0.0.1",
         port: int = 8788,
+        certfile: Optional[str] = None,
+        keyfile: Optional[str] = None,
+        retention_days: int = 0,
+        device_tokens: Optional[Dict[str, str]] = None,
     ) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -36,8 +42,14 @@ class RelayServer:
         except OSError:
             pass
         self.token = token or secrets.token_urlsafe(32)
+        self.retention_days = max(int(retention_days), 0)
+        self.device_tokens = dict(device_tokens or {})
         handler = _make_handler(self)
         self.httpd = ThreadingHTTPServer((host, port), handler)
+        if certfile and keyfile:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=certfile, keyfile=keyfile)
+            self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
         self._thread: Optional[threading.Thread] = None
 
     @property
@@ -50,9 +62,24 @@ class RelayServer:
         return "http://{}:{}".format(host, port)
 
     def start(self) -> "RelayServer":
+        self.cleanup()
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self._thread.start()
         return self
+
+    def cleanup(self) -> int:
+        if self.retention_days <= 0:
+            return 0
+        cutoff = time.time() - self.retention_days * 86400
+        removed = 0
+        for path in Path(self.directory).glob("*.json"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        return removed
 
     def stop(self) -> None:
         self.httpd.shutdown()
@@ -76,16 +103,19 @@ def _make_handler(owner: "RelayServer"):
             if path == "/v1/health":
                 self._json(200, {"ok": True})
                 return
-            if not self._authorized(owner.token):
-                self._json(401, {"error": "unauthorized"})
-                return
             if path == "/v1/bundles":
+                if not self._authorized(owner.token):
+                    self._json(401, {"error": "unauthorized"})
+                    return
                 self._json(200, _list_bundles(owner.directory))
                 return
             if path.startswith("/v1/bundles/"):
                 device = path.split("/")[3]
                 if not DEVICE_RE.match(device):
                     self._json(400, {"error": "invalid device id"})
+                    return
+                if not self._authorized(owner.token, device):
+                    self._json(401, {"error": "unauthorized"})
                     return
                 bundle = _read_bundle(owner.directory, device)
                 if bundle is None:
@@ -97,15 +127,15 @@ def _make_handler(owner: "RelayServer"):
 
         def do_PUT(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
-            if not self._authorized(owner.token):
-                self._json(401, {"error": "unauthorized"})
-                return
             if not path.startswith("/v1/bundles/"):
                 self._json(404, {"error": "not found"})
                 return
             device = path.split("/")[3]
             if not DEVICE_RE.match(device):
                 self._json(400, {"error": "invalid device id"})
+                return
+            if not self._authorized(owner.token, device):
+                self._json(401, {"error": "unauthorized"})
                 return
             try:
                 bundle = self._read_body()
@@ -120,13 +150,36 @@ def _make_handler(owner: "RelayServer"):
                     self._json(400, {"error": "missing field: {}".format(key)})
                     return
             size = _write_bundle(owner.directory, device, bundle)
+            owner.cleanup()
             self._json(200, {"device_id": device, "size": size, "updated_at": utc_now()})
 
-        def _authorized(self, token: str) -> bool:
+        def do_DELETE(self) -> None:  # noqa: N802
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            if not path.startswith("/v1/bundles/"):
+                self._json(404, {"error": "not found"})
+                return
+            device = path.split("/")[3]
+            if not DEVICE_RE.match(device):
+                self._json(400, {"error": "invalid device id"})
+                return
+            if not self._authorized(owner.token, device):
+                self._json(401, {"error": "unauthorized"})
+                return
+            path_obj = _bundle_path(owner.directory, device)
+            if path_obj.exists():
+                path_obj.unlink()
+            self._json(200, {"device_id": device, "deleted": True})
+
+        def _authorized(self, admin_token: str, device: Optional[str] = None) -> bool:
             header = self.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
                 return False
-            return hmac.compare_digest(header[len("Bearer "):], token)
+            supplied = header[len("Bearer "):]
+            if hmac.compare_digest(supplied, admin_token):
+                return True
+            if device and device in owner.device_tokens:
+                return hmac.compare_digest(supplied, owner.device_tokens[device])
+            return False
 
         def _read_body(self) -> Dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0") or 0)
@@ -152,6 +205,28 @@ def _make_handler(owner: "RelayServer"):
             self.wfile.write(encoded)
 
     return Handler
+
+
+def load_devices(path: Path) -> Dict[str, str]:
+    path = Path(path)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def save_devices(path: Path, devices: Dict[str, str]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(devices, ensure_ascii=False, indent=2, sort_keys=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(payload)
 
 
 def _bundle_path(directory: Path, device: str) -> Path:

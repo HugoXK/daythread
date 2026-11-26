@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from . import brief, memory, obs, proactivity
-from .db import canonical, json_load, row_to_dict, utc_now
+from . import brief, maintenance, memory, obs, proactivity
+from .db import canonical, get_setting, json_load, row_to_dict, utc_now
 from .errors import ValidationError
 
 JOBS = ("morning", "evening", "maintenance")
@@ -52,8 +52,12 @@ def tick(
     try:
         if selected_job == "maintenance":
             decayed = memory.decay(conn)
-            conn.execute("PRAGMA optimize")
-            detail = {"decayed_facts": decayed}
+            pruned = maintenance.prune(
+                conn,
+                older_than_days=int(get_setting(conn, "maintenance.retention_days", "90") or 90),
+                keep_recent_runs=int(get_setting(conn, "maintenance.keep_runs", "200") or 200),
+            )
+            detail = {"decayed_facts": decayed, "pruned": pruned}
             status = "ok"
         else:
             proactive = proactivity.proactive(conn, now=moment, deliver=True)
@@ -166,8 +170,7 @@ def daemon(
     while True:
         conn = connect(db_path)
         try:
-            if not is_initialized(conn):
-                init_db(conn)
+            init_db(conn)
             run_due(conn, home)
         finally:
             conn.close()

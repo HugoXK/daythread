@@ -6,6 +6,7 @@ import argparse
 import getpass
 import json
 import os
+import secrets
 import shlex
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from . import (
     connectors,
     crypto,
     export,
+    maintenance,
     mcp,
     memory,
     migrations,
@@ -87,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     fact_list = fact_sub.add_parser("list", help="list facts")
     fact_list.add_argument("--type", choices=SUBJECT_TYPES)
     fact_list.add_argument("--subject")
+    fact_list.add_argument("--include-sensitive", action="store_true")
 
     fact_show = fact_sub.add_parser("show", help="show one fact")
     fact_show.add_argument("id")
@@ -96,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fact_search = fact_sub.add_parser("search", help="search facts")
     fact_search.add_argument("query")
+    fact_search.add_argument("--include-sensitive", action="store_true")
 
     fact_edit = fact_sub.add_parser("edit", help="edit a fact")
     fact_edit.add_argument("id")
@@ -214,6 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
     connector_connect.add_argument("--token-ref", default=None)
     connector_disconnect = connector_sub.add_parser("disconnect", help="disconnect a connector")
     connector_disconnect.add_argument("id")
+    connector_revoke = connector_sub.add_parser("revoke", help="revoke and delete OAuth tokens")
+    connector_revoke.add_argument("id")
     connector_sync = connector_sub.add_parser("sync", help="sync a connected connector")
     connector_sync.add_argument("id")
     connector_call = connector_sub.add_parser("call", help="propose a connector action")
@@ -245,6 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     exp = sub.add_parser("export", help="export memory and local state")
     exp.add_argument("--format", choices=("md", "json"), default="md")
     exp.add_argument("--out", default=None, help="write to a file instead of stdout")
+    exp.add_argument("--include-sensitive", action="store_true")
 
     serve = sub.add_parser("serve", help="start the local HTTP API")
     serve.add_argument("--host", default="127.0.0.1")
@@ -290,6 +297,14 @@ def build_parser() -> argparse.ArgumentParser:
     notifications = sub.add_parser("notifications", help="list scheduler notifications")
     notifications.add_argument("--limit", type=int, default=50)
 
+    maint = sub.add_parser("maintenance", help="retention and database housekeeping")
+    maint_sub = maint.add_subparsers(dest="maintenance_cmd", required=True)
+    maint_sub.add_parser("stats", help="show database sizes and row counts")
+    maint_prune = maint_sub.add_parser("prune", help="delete old operational rows")
+    maint_prune.add_argument("--older-than", type=int, default=90)
+    maint_prune.add_argument("--keep-runs", type=int, default=200)
+    maint_prune.add_argument("--vacuum", action="store_true")
+
     sched = sub.add_parser("scheduler", help="inspect scheduler runs")
     sched_sub = sched.add_subparsers(dest="scheduler_cmd", required=True)
     sched_list = sched_sub.add_parser("list", help="list scheduler runs")
@@ -306,6 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("path")
     restore.add_argument("--replace", action="store_true")
     restore.add_argument("--verify", action="store_true")
+    restore.add_argument("--trust", action="store_true", help="skip backup signature verification")
 
 
     secret = sub.add_parser("secret", help="encrypted local secret vault")
@@ -351,6 +367,19 @@ def build_parser() -> argparse.ArgumentParser:
     relay_serve.add_argument("--port", type=int, default=8788)
     relay_serve.add_argument("--token", default=None)
     relay_serve.add_argument("--token-env", default="DAYTHREAD_RELAY_TOKEN")
+    relay_serve.add_argument("--certfile", default=None)
+    relay_serve.add_argument("--keyfile", default=None)
+    relay_serve.add_argument("--retention-days", type=int, default=0)
+    relay_serve.add_argument("--devices", default=None, help="JSON file mapping device_id to token")
+    relay_devices = relay_sub.add_parser("devices", help="manage relay device tokens")
+    relay_devices_sub = relay_devices.add_subparsers(dest="relay_devices_cmd", required=True)
+    for action in ("add", "remove", "list"):
+        command = relay_devices_sub.add_parser(action)
+        command.add_argument("--file", default=None)
+        if action in ("add", "remove"):
+            command.add_argument("device_id")
+        if action == "add":
+            command.add_argument("--token", default=None)
 
     serve.add_argument("--print-token", action="store_true")
     serve.add_argument("--rotate-token", action="store_true")
@@ -367,8 +396,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     db_path = Path(args.db).expanduser().resolve() if args.db else home / "daythread.db"
     conn = connect(db_path)
     try:
-        if not is_initialized(conn):
-            init_db(conn)
+        init_db(conn)
         _dispatch(args, conn, home, db_path)
     except (DaythreadError, KeyError, ValueError) as exc:
         print("error: {}".format(exc), file=sys.stderr)
@@ -475,7 +503,11 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
         _export(args, conn)
     elif cmd == "ask":
         response = models.ask(
-            conn, args.text, task=args.task, use_cache=not args.no_cache
+            conn,
+            args.text,
+            task=args.task,
+            use_cache=not args.no_cache,
+            home=home,
         )
         if args.as_json:
             _print_json(response.to_dict())
@@ -505,6 +537,22 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                         item["ts"], item["status"], item["kind"], item["title"]
                     )
                 )
+    elif cmd == "maintenance":
+        if args.maintenance_cmd == "stats":
+            data = maintenance.stats(conn)
+            _print_json(data) if args.as_json else print(
+                json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2)
+            )
+        else:
+            removed = maintenance.prune(
+                conn,
+                older_than_days=args.older_than,
+                keep_recent_runs=args.keep_runs,
+                vacuum=args.vacuum,
+            )
+            _print_json(removed) if args.as_json else print(
+                "pruned: {}".format(json.dumps(removed, sort_keys=True))
+            )
     elif cmd == "scheduler":
         items = scheduler.list_scheduler_runs(conn, limit=args.limit)
         if args.as_json:
@@ -529,14 +577,20 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
     elif cmd == "restore":
         path = Path(args.path).expanduser()
         if args.verify:
-            info = backup.verify_backup(path)
+            info = backup.verify_backup(path, home=home)
             _print_json(info) if args.as_json else print(
                 "backup OK: {} ({} fact(s), schema v{})".format(
                     info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
                 )
             )
         else:
-            counts = backup.restore_backup(conn, path, replace=args.replace)
+            counts = backup.restore_backup(
+                conn,
+                path,
+                replace=args.replace,
+                home=home,
+                verify_signature=not args.trust,
+            )
             _print_json(counts) if args.as_json else print(
                 "restored: {}".format(json.dumps(counts, sort_keys=True))
             )
@@ -545,7 +599,10 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
     elif cmd == "sync":
         _sync(args, conn, home)
     elif cmd == "relay":
-        _relay(args, home)
+        if args.relay_cmd == "devices":
+            _relay_devices(args, home)
+        else:
+            _relay(args, home)
     elif cmd == "serve":
         _serve(args, home, db_path)
     else:
@@ -574,7 +631,12 @@ def _fact(args: argparse.Namespace, conn) -> None:
                 )
             )
     elif args.fact_cmd == "list":
-        facts = memory.list_facts(conn, subject_type=args.type, subject_id=args.subject)
+        facts = memory.list_facts(
+            conn,
+            subject_type=args.type,
+            subject_id=args.subject,
+            include_sensitive=args.include_sensitive,
+        )
         if args.as_json:
             _print_json(facts)
         else:
@@ -592,7 +654,9 @@ def _fact(args: argparse.Namespace, conn) -> None:
         else:
             print("deleted {} (tombstoned)".format(fact["id"][:8]))
     elif args.fact_cmd == "search":
-        facts = memory.search_facts(conn, args.query)
+        facts = memory.search_facts(
+            conn, args.query, include_sensitive=args.include_sensitive
+        )
         if args.as_json:
             _print_json(facts)
         else:
@@ -871,6 +935,9 @@ def _connector(args: argparse.Namespace, conn, home: Path) -> None:
             on_url=on_url,
         )
         print("authorized {}".format(args.id))
+    elif args.connector_cmd == "revoke":
+        result = connectors.revoke(conn, home, args.id)
+        _print_json(result) if args.as_json else print("revoked {}".format(result["id"]))
     elif args.connector_cmd == "disconnect":
         result = connectors.disconnect(conn, args.id, home=home)
         _print_json(result) if args.as_json else print("disconnected {}".format(result["id"]))
@@ -1056,9 +1123,15 @@ def _tick_result(result: Dict[str, Any], as_json: bool) -> None:
 
 def _export(args: argparse.Namespace, conn) -> None:
     if args.format == "json":
-        text = json.dumps(export.export_json(conn), ensure_ascii=False, indent=2)
+        text = json.dumps(
+            export.export_json(conn, include_sensitive=args.include_sensitive),
+            ensure_ascii=False,
+            indent=2,
+        )
     else:
-        text = export.export_markdown(conn)
+        text = export.export_markdown(
+            conn, include_sensitive=args.include_sensitive
+        )
     if args.out:
         path = Path(args.out).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1240,11 +1313,21 @@ def _relay_token(args: argparse.Namespace) -> str:
 def _relay(args: argparse.Namespace, home: Path) -> None:
     directory = Path(args.dir).expanduser() if args.dir else home / "relay"
     token = args.token or os.environ.get(args.token_env) or None
+    devices_path = (
+        Path(args.devices).expanduser()
+        if args.devices
+        else home / "relay" / "devices.json"
+    )
+    devices = relay.load_devices(devices_path) if devices_path.exists() else None
     server = relay.RelayServer(
         directory,
         token=token,
         host=args.host,
         port=args.port,
+        certfile=args.certfile,
+        keyfile=args.keyfile,
+        retention_days=args.retention_days,
+        device_tokens=devices,
     )
     print("daythread relay on {}".format(server.url))
     print("token: {}".format(server.token))
@@ -1252,6 +1335,32 @@ def _relay(args: argparse.Namespace, home: Path) -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         server.stop()
+
+
+def _relay_devices(args: argparse.Namespace, home: Path) -> None:
+    path = (
+        Path(args.file).expanduser()
+        if args.file
+        else home / "relay" / "devices.json"
+    )
+    devices = relay.load_devices(path)
+    if args.relay_devices_cmd == "list":
+        if args.as_json:
+            _print_json(devices)
+        else:
+            for device_id, token in sorted(devices.items()):
+                print("{}  {}".format(device_id, token[:8] + "..."))
+    elif args.relay_devices_cmd == "add":
+        token = args.token or secrets.token_urlsafe(24)
+        devices[args.device_id] = token
+        relay.save_devices(path, devices)
+        _print_json({"device_id": args.device_id, "token": token}) if args.as_json else print(
+            "device {} token: {}".format(args.device_id, token)
+        )
+    elif args.relay_devices_cmd == "remove":
+        devices.pop(args.device_id, None)
+        relay.save_devices(path, devices)
+        print("removed device {}".format(args.device_id))
 
 
 def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:

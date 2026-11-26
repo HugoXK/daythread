@@ -90,6 +90,59 @@ class MicrosoftMailOpener:
         ).encode("utf-8")
 
 
+class PaginatedCalendarOpener:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, request):
+        self.calls += 1
+        if "pageToken" in request.full_url:
+            return json.dumps(
+                {"items": [{"id": "evt-2", "summary": "Second", "start": {"dateTime": "x"}}]}
+            ).encode("utf-8")
+        return json.dumps(
+            {
+                "items": [{"id": "evt-1", "summary": "First", "start": {"dateTime": "x"}}],
+                "nextPageToken": "page-2",
+            }
+        ).encode("utf-8")
+
+
+class PaginatedMicrosoftOpener:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, request):
+        self.calls += 1
+        if request.full_url.endswith("next"):
+            return json.dumps(
+                {"value": [{"id": "ms-2", "subject": "Second", "start": {"dateTime": "x"}}]}
+            ).encode("utf-8")
+        return json.dumps(
+            {
+                "value": [{"id": "ms-1", "subject": "First", "start": {"dateTime": "x"}}],
+                "@odata.nextLink": "https://graph.example/next",
+            }
+        ).encode("utf-8")
+
+
+class RateLimitThenOkOpener:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, request):
+        self.calls += 1
+        if self.calls == 1:
+            import urllib.error
+
+            raise urllib.error.HTTPError(
+                request.full_url, 429, "rate limited", {"Retry-After": "0"}, None
+            )
+        return json.dumps(
+            {"items": [{"id": "evt-1", "summary": "After retry", "start": {"dateTime": "x"}}]}
+        ).encode("utf-8")
+
+
 class GoogleConnectorTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -153,6 +206,35 @@ class GoogleConnectorTest(unittest.TestCase):
         self.assertEqual(result["id"], "draft-1")
         body = json.loads(opener.requests[0].data.decode("utf-8"))
         self.assertIn("raw", body["message"])
+
+    def test_google_calendar_pagination(self):
+        opener = PaginatedCalendarOpener()
+        events = connectors._sync_google_calendar(
+            NOW, {"access_token": "x"}, opener=opener
+        )
+        self.assertEqual(len(events), 2)
+        self.assertEqual(opener.calls, 2)
+
+    def test_microsoft_pagination(self):
+        opener = PaginatedMicrosoftOpener()
+        events = connectors._sync_microsoft_calendar(
+            NOW, {"access_token": "x"}, opener=opener
+        )
+        self.assertEqual(len(events), 2)
+        self.assertEqual(opener.calls, 2)
+
+    def test_retry_on_429(self):
+        original = connectors.HTTP_RETRY_BASE
+        connectors.HTTP_RETRY_BASE = 0
+        try:
+            opener = RateLimitThenOkOpener()
+            events = connectors._sync_google_calendar(
+                NOW, {"access_token": "x"}, opener=opener
+            )
+            self.assertEqual(len(events), 1)
+            self.assertEqual(opener.calls, 2)
+        finally:
+            connectors.HTTP_RETRY_BASE = original
 
     def test_microsoft_read_adapters(self):
         events = connectors._sync_microsoft_calendar(
@@ -225,6 +307,54 @@ class GoogleConnectorTest(unittest.TestCase):
             )
         finally:
             connectors.HTTP_OPENER = original
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_scope_mismatch_requires_reauthorization(self):
+        self.conn.execute(
+            "INSERT INTO connectors(id, version, status, scopes, connected_at) VALUES('google.calendar', '1.1.0', 'connected', '[]', '2026-01-01')"
+        )
+        self.conn.commit()
+        oauth.TokenStore(self.conn, self.home).save(
+            "google.calendar",
+            {
+                "access_token": "x",
+                "refresh_token": "r",
+                "expires_at": "2099-01-01T00:00:00+00:00",
+                "scope": "https://www.googleapis.com/auth/calendar.readonly",
+            },
+        )
+        with self.assertRaises(ValidationError):
+            connectors.sync(self.conn, "google.calendar", now=NOW, home=self.home)
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_revoke_deletes_token(self):
+        self.conn.execute(
+            "INSERT INTO connectors(id, version, status, scopes, connected_at) VALUES('google.gmail', '1.1.0', 'connected', '[]', '2026-01-01')"
+        )
+        self.conn.commit()
+        oauth.TokenStore(self.conn, self.home).save(
+            "google.gmail", {"access_token": "x", "refresh_token": "r"}
+        )
+        connectors.revoke(self.conn, self.home, "google.gmail")
+        self.assertIsNone(oauth.TokenStore(self.conn, self.home).load("google.gmail"))
+        row = self.conn.execute(
+            "SELECT status FROM connectors WHERE id = 'google.gmail'"
+        ).fetchone()
+        self.assertEqual(row["status"], "disconnected")
+
+    def test_scope_helper(self):
+        self.assertTrue(
+            connectors.oauth_scopes_ok(
+                ["https://www.googleapis.com/auth/calendar"],
+                ["calendar", "openid"],
+            )
+        )
+        self.assertFalse(
+            connectors.oauth_scopes_ok(
+                ["https://www.googleapis.com/auth/calendar"],
+                ["https://www.googleapis.com/auth/gmail.readonly"],
+            )
+        )
 
     @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_sync_with_stored_token(self):

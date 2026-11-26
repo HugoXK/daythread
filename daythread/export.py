@@ -9,9 +9,14 @@ from typing import Any, Dict, List
 from .db import json_load, row_to_dict
 
 
-def export_json(conn: sqlite3.Connection) -> Dict[str, Any]:
+def export_json(
+    conn: sqlite3.Connection, include_sensitive: bool = False
+) -> Dict[str, Any]:
     facts = []
-    for row in conn.execute("SELECT * FROM facts ORDER BY updated_at DESC").fetchall():
+    where = "" if include_sensitive else " WHERE sensitivity NOT IN ('secret', 'health')"
+    for row in conn.execute(
+        "SELECT * FROM facts{} ORDER BY updated_at DESC".format(where)
+    ).fetchall():
         item = row_to_dict(row)
         item["object"] = json_load(item["object"])
         item["provenance"] = json_load(item["provenance"])
@@ -35,8 +40,10 @@ def export_json(conn: sqlite3.Connection) -> Dict[str, Any]:
     }
 
 
-def export_markdown(conn: sqlite3.Connection) -> str:
-    data = export_json(conn)
+def export_markdown(
+    conn: sqlite3.Connection, include_sensitive: bool = False
+) -> str:
+    data = export_json(conn, include_sensitive=include_sensitive)
     lines: List[str] = ["# Daythread memory export", ""]
 
     lines.append("## Facts")

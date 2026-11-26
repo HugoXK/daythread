@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -9,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import migrations, obs
+from . import crypto, migrations, obs
 from .db import canonical, row_to_dict, utc_now
 from .errors import BackupError
 
@@ -71,6 +73,9 @@ def create_backup(
     data = build_payload(conn)
     checksum = _checksum(data)
     bundle = {"format": FORMAT, "checksum": checksum, "data": data}
+    if crypto.HAVE_CRYPTO:
+        bundle["signature_alg"] = "hmac-sha256"
+        bundle["signature"] = _signature(data, home)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = directory / "daythread-{}.json".format(stamp)
     path.write_text(
@@ -81,7 +86,11 @@ def create_backup(
     return path
 
 
-def load_backup(path: Path) -> Dict[str, Any]:
+def load_backup(
+    path: Path,
+    home: Optional[Path] = None,
+    verify_signature: bool = True,
+) -> Dict[str, Any]:
     path = Path(path)
     try:
         bundle = json.loads(path.read_text(encoding="utf-8"))
@@ -94,6 +103,14 @@ def load_backup(path: Path) -> Dict[str, Any]:
         raise BackupError("invalid backup payload")
     if bundle.get("checksum") != _checksum(data):
         raise BackupError("backup checksum mismatch")
+    signature = bundle.get("signature")
+    if signature and verify_signature:
+        if not crypto.HAVE_CRYPTO:
+            raise BackupError("backup is signed but cryptography is not installed")
+        if home is None:
+            raise BackupError("backup is signed; provide the daythread home to verify")
+        if not hmac.compare_digest(signature, _signature(data, Path(home))):
+            raise BackupError("backup signature mismatch")
     if int(data.get("schema_version", 0)) > migrations.LATEST_VERSION:
         raise BackupError("backup was created by a newer schema")
     return data
@@ -103,8 +120,14 @@ def restore_backup(
     conn: sqlite3.Connection,
     path: Path,
     replace: bool = False,
+    home: Optional[Path] = None,
+    verify_signature: bool = True,
 ) -> Dict[str, int]:
-    return restore_payload(conn, load_backup(path), replace=replace)
+    return restore_payload(
+        conn,
+        load_backup(path, home=home, verify_signature=verify_signature),
+        replace=replace,
+    )
 
 
 def restore_payload(
@@ -133,8 +156,8 @@ def restore_payload(
     return counts
 
 
-def verify_backup(path: Path) -> Dict[str, Any]:
-    data = load_backup(path)
+def verify_backup(path: Path, home: Optional[Path] = None) -> Dict[str, Any]:
+    data = load_backup(path, home=home)
     return {
         "format": data["format"],
         "schema_version": data["schema_version"],
@@ -174,6 +197,13 @@ def _insert_rows(
 
 def _checksum(data: Dict[str, Any]) -> str:
     return sha256(canonical(data).encode("utf-8")).hexdigest()
+
+
+def _signature(data: Dict[str, Any], home: Path) -> str:
+    key = crypto.load_or_create_master_key(Path(home))
+    return hmac.new(
+        key, canonical(data).encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 def _sensitive(key: str) -> bool:

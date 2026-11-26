@@ -10,10 +10,11 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from . import __version__, obs
+from . import __version__, crypto, obs
 from .db import canonical, get_setting, json_load, utc_now
 from .errors import BudgetExceededError, ProviderError, ValidationError
 
@@ -144,8 +145,14 @@ class OpenAICompatibleProvider:
 
 
 class ModelGateway:
-    def __init__(self, conn, providers: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        conn,
+        providers: Optional[Dict[str, Any]] = None,
+        home: Optional[Path] = None,
+    ) -> None:
         self.conn = conn
+        self.home = Path(home) if home is not None else None
         self.providers: Dict[str, Any] = {"local.echo": EchoProvider()}
         if providers:
             self.providers.update(providers)
@@ -261,13 +268,25 @@ class ModelGateway:
         raise ProviderError("unknown model provider: {}".format(name))
 
     def _get_cache(self, key: str) -> Optional[ModelResponse]:
+        if self.home is None or not crypto.HAVE_CRYPTO:
+            return None
         row = self.conn.execute(
             "SELECT * FROM model_cache WHERE key = ? AND expires_at > ?",
             (key, utc_now()),
         ).fetchone()
         if row is None:
             return None
-        payload = json_load(row["response"])
+        stored = json_load(row["response"])
+        if not isinstance(stored, dict) or not stored.get("encrypted"):
+            return None
+        key_bytes = crypto.load_or_create_master_key(self.home)
+        try:
+            plaintext = crypto.decrypt_with_key(
+                key_bytes, stored["nonce"], stored["ciphertext"]
+            )
+            payload = json.loads(plaintext.decode("utf-8"))
+        except Exception:  # noqa: BLE001 - treat unreadable cache as a miss
+            return None
         return ModelResponse(
             text=payload["text"],
             provider=payload["provider"],
@@ -280,7 +299,17 @@ class ModelGateway:
         )
 
     def _set_cache(self, key: str, response: ModelResponse, ttl_hours: int) -> None:
+        if self.home is None or not crypto.HAVE_CRYPTO:
+            return
         expires = (datetime.now(timezone.utc) + timedelta(hours=max(ttl_hours, 0))).isoformat()
+        key_bytes = crypto.load_or_create_master_key(self.home)
+        plaintext = canonical(response.to_dict() | {"raw": response.raw}).encode("utf-8")
+        envelope = crypto.encrypt_with_key(key_bytes, plaintext)
+        stored = {
+            "encrypted": True,
+            "nonce": envelope["nonce"],
+            "ciphertext": envelope["ciphertext"],
+        }
         self.conn.execute(
             """
             INSERT OR REPLACE INTO model_cache(key, provider, model, response, created_at, expires_at)
@@ -290,7 +319,7 @@ class ModelGateway:
                 key,
                 response.provider,
                 response.model,
-                canonical(response.to_dict() | {"raw": response.raw}),
+                canonical(stored),
                 utc_now(),
                 expires,
             ),
@@ -349,8 +378,14 @@ def list_models(conn) -> Dict[str, Any]:
     return {"config": config, "providers": providers, "usage_today": usage}
 
 
-def ask(conn, text: str, task: str = "chat", use_cache: bool = True) -> ModelResponse:
-    gateway = ModelGateway(conn)
+def ask(
+    conn,
+    text: str,
+    task: str = "chat",
+    use_cache: bool = True,
+    home: Optional[Path] = None,
+) -> ModelResponse:
+    gateway = ModelGateway(conn, home=home)
     return gateway.chat([{"role": "user", "content": text}], task=task, use_cache=use_cache)
 
 

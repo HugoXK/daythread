@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_VERSION = 4
+LATEST_VERSION = 5
 
 
 def current_version(conn: sqlite3.Connection) -> int:
@@ -38,6 +38,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '4')")
         conn.commit()
         version = 4
+    if version < 5:
+        _migrate_v5(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '5')")
+        conn.commit()
+        version = 5
     return version
 
 
@@ -326,3 +331,23 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         conn.rollback()
+
+
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    _add_column(conn, "runs", "lease_owner", "TEXT")
+    _add_column(conn, "runs", "lease_until", "TEXT")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS api_rate (
+            key          TEXT NOT NULL,
+            window_start INTEGER NOT NULL,
+            count        INTEGER NOT NULL,
+            PRIMARY KEY (key, window_start)
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+        CREATE INDEX IF NOT EXISTS idx_run_steps_created ON run_steps(created_at);
+        CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_connector_items_ts ON connector_items(ts);
+        DELETE FROM model_cache;
+        """
+    )

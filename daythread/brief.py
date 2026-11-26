@@ -61,6 +61,7 @@ def morning_brief(
         """
         SELECT * FROM facts
         WHERE deleted_at IS NULL
+          AND sensitivity NOT IN ('secret', 'health')
           AND (predicate IN ('commitment', 'promise', 'due') OR subject_type = 'goal')
         ORDER BY updated_at DESC LIMIT 5
         """,
@@ -120,7 +121,7 @@ def evening_brief(
     ]
     recent = _facts(
         conn,
-        "SELECT * FROM facts WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 5",
+        "SELECT * FROM facts WHERE deleted_at IS NULL AND sensitivity NOT IN ('secret', 'health') ORDER BY updated_at DESC LIMIT 5",
         (),
     )
     messages = _messages(conn)

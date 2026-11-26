@@ -133,6 +133,49 @@ class RuntimeV2Test(unittest.TestCase):
         run = runtime.approve(self.conn, self.home, run["id"])
         self.assertEqual(run["state"], "completed")
 
+    def test_lease_is_atomic(self):
+        run = runtime.propose(self.conn, self.home, "message.send", {"to": "x@example.com"})
+        self.conn.execute("UPDATE runs SET state = 'approved' WHERE id = ?", (run["id"],))
+        self.conn.commit()
+        self.assertTrue(runtime._claim_run(self.conn, run["id"], "owner-a"))
+        other = connect(self.home / "db.sqlite")
+        try:
+            self.assertFalse(runtime._claim_run(other, run["id"], "owner-b"))
+        finally:
+            other.close()
+
+    def test_lease_released_after_completion(self):
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "note.write",
+            {"path": "a.md", "content": "A"},
+        )
+        self.assertEqual(run["state"], "completed")
+        row = self.conn.execute(
+            "SELECT lease_owner, lease_until FROM runs WHERE id = ?", (run["id"],)
+        ).fetchone()
+        self.assertIsNone(row["lease_owner"])
+        self.assertIsNone(row["lease_until"])
+
+    def test_step_timeout(self):
+        import time as _time
+
+        def slow(ctx, args):
+            _time.sleep(2)
+            return ToolResult("late")
+
+        TOOLS["test.slow"] = ToolSpec("test.slow", "write", "slow", slow, "test")
+        set_setting(self.conn, "runtime.step_timeout_seconds", "0.1")
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "test.slow",
+            {},
+        )
+        self.assertEqual(run["state"], "failed")
+        self.assertIn("timed out", run["error"])
+
     def test_cancel_pending(self):
         run = runtime.propose(self.conn, self.home, "message.send", {"to": "maya@example.com"})
         self.assertEqual(run["state"], "pending_approval")

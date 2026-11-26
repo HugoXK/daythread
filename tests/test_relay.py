@@ -1,5 +1,10 @@
+import json
+import os
 import tempfile
+import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from daythread import crypto, memory, relay, sync
@@ -66,6 +71,75 @@ class RelayTest(unittest.TestCase):
                 "wrong-token",
                 remote_device="device-a",
             )
+
+    def _request(self, method, path, token):
+        request = urllib.request.Request(
+            self.server.url + path,
+            method=method,
+            headers={"Authorization": "Bearer {}".format(token)},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, {}
+
+    def test_delete(self):
+        sync.push(
+            self.conn_a,
+            self.home_a,
+            "pw",
+            self.server.url,
+            "relay-token",
+            remote_device="device-a",
+        )
+        status, body = self._request("DELETE", "/v1/bundles/device-a", "relay-token")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["deleted"])
+        with self.assertRaises(ProviderError):
+            sync.pull(
+                self.conn_b,
+                self.home_b,
+                "pw",
+                self.server.url,
+                "relay-token",
+                remote_device="device-a",
+            )
+
+    def test_retention_cleanup(self):
+        sync.push(
+            self.conn_a,
+            self.home_a,
+            "pw",
+            self.server.url,
+            "relay-token",
+            remote_device="device-a",
+        )
+        path = self.root / "relay" / "device-a.json"
+        old = time.time() - 10 * 86400
+        os.utime(path, (old, old))
+        self.server.retention_days = 7
+        self.assertEqual(self.server.cleanup(), 1)
+        self.assertFalse(path.exists())
+
+    def test_device_tokens(self):
+        self.server.device_tokens["device-a"] = "device-token"
+        sync.push(
+            self.conn_a,
+            self.home_a,
+            "pw",
+            self.server.url,
+            "relay-token",
+            remote_device="device-a",
+        )
+        self.assertEqual(
+            self._request("GET", "/v1/bundles/device-a", "device-token")[0], 200
+        )
+        self.assertEqual(
+            self._request("GET", "/v1/bundles/device-a", "wrong")[0], 401
+        )
+        self.assertEqual(self._request("GET", "/v1/bundles", "device-token")[0], 401)
+        self.assertEqual(self._request("GET", "/v1/bundles", "relay-token")[0], 200)
 
     def test_missing_bundle(self):
         with self.assertRaises(ProviderError):

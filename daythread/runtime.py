@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import sqlite3
+import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -29,7 +32,78 @@ def _update_state(conn: sqlite3.Connection, run_id: str, state: str, error: Opti
             "UPDATE runs SET state = ?, error = ?, updated_at = ? WHERE id = ?",
             (state, error, utc_now(), run_id),
         )
+    if state in FINAL_STATES:
+        conn.execute(
+            "UPDATE runs SET lease_owner = NULL, lease_until = NULL WHERE id = ?",
+            (run_id,),
+        )
     conn.commit()
+
+
+def _lease_owner() -> str:
+    return "{}:{}".format(os.getpid(), uuid4().hex[:8])
+
+
+def _lease_until(conn: sqlite3.Connection) -> str:
+    seconds = int(get_setting(conn, "runtime.lease_seconds", "60") or 60)
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(seconds, 5))).replace(
+        microsecond=0
+    ).isoformat()
+
+
+def _claim_run(conn: sqlite3.Connection, run_id: str, owner: str) -> bool:
+    now = utc_now()
+    until = _lease_until(conn)
+    cursor = conn.execute(
+        """
+        UPDATE runs
+        SET state = 'running', lease_owner = ?, lease_until = ?, updated_at = ?
+        WHERE id = ? AND state IN ('approved', 'running')
+          AND (lease_owner IS NULL OR lease_owner = ? OR lease_until IS NULL OR lease_until < ?)
+        """,
+        (owner, until, now, run_id, owner, now),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def _heartbeat(conn: sqlite3.Connection, run_id: str, owner: str) -> None:
+    cursor = conn.execute(
+        "UPDATE runs SET lease_until = ? WHERE id = ? AND lease_owner = ?",
+        (_lease_until(conn), run_id, owner),
+    )
+    conn.commit()
+    if cursor.rowcount != 1:
+        raise RuntimeError("run lease lost for {}".format(run_id))
+
+
+def _release_lease(conn: sqlite3.Connection, run_id: str) -> None:
+    conn.execute(
+        "UPDATE runs SET lease_owner = NULL, lease_until = NULL WHERE id = ?",
+        (run_id,),
+    )
+    conn.commit()
+
+
+def _run_with_timeout(fn, ctx, args, timeout: float):
+    """Enforce a wall-clock timeout when running on the main thread.
+
+    Signal-based timeouts are safe for the CLI. Server requests run in worker
+    threads; they fall back to no timeout because a signal alarm is process-wide.
+    """
+    if not hasattr(signal, "SIGALRM") or threading.current_thread() is not threading.main_thread():
+        return fn(ctx, args)
+
+    def _raise(signum, frame):
+        raise TimeoutError("step timed out after {:.1f}s".format(timeout))
+
+    previous = signal.signal(signal.SIGALRM, _raise)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    try:
+        return fn(ctx, args)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _update_checkpoint(conn: sqlite3.Connection, run_id: str, checkpoint: Dict[str, Any]) -> None:
@@ -294,7 +368,9 @@ def execute_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, 
     run = get_run(conn, run_id)
     if run["state"] not in ("approved", "running"):
         raise ValueError("run {} is {}, not executable".format(run_id, run["state"]))
-    _update_state(conn, run_id, "running")
+    owner = _lease_owner()
+    if not _claim_run(conn, run_id, owner):
+        raise ValueError("run {} is locked by another executor".format(run_id))
     steps = planner.toposort(run["plan"]["steps"])
     single = len(steps) == 1
     if not single:
@@ -314,8 +390,13 @@ def execute_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, 
             return _fail_run(conn, run_id, "max_steps budget exceeded")
         if _elapsed_seconds(run["created_at"]) > int(budget["max_seconds"]):
             return _fail_run(conn, run_id, "max_seconds budget exceeded")
+        if get_run(conn, run_id)["state"] == "cancelled":
+            append_step(conn, run_id, "cancelled", {"reason": "between steps"})
+            _release_lease(conn, run_id)
+            return get_run(conn, run_id)
         try:
             _execute_step(conn, home, run, step, single, budget)
+            _heartbeat(conn, run_id, owner)
         except Exception as exc:  # noqa: BLE001 - record and stop the run
             return _fail_run(conn, run_id, "{}: {}".format(type(exc).__name__, exc))
         completed.add(step["id"])
@@ -325,6 +406,7 @@ def execute_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, 
     if _elapsed_seconds(run["created_at"]) > int(budget["max_seconds"]):
         return _fail_run(conn, run_id, "max_seconds budget exceeded", completed=completed)
     _update_state(conn, run_id, "completed")
+    _release_lease(conn, run_id)
     if single:
         append_step(conn, run_id, "run.completed", {"step_id": steps[0]["id"]})
     else:
@@ -386,8 +468,13 @@ def _execute_step(
             {"step_id": step["id"], "tool": step["tool"], "attempt": attempt},
         )
         ctx = ToolContext(conn=conn, home=Path(home), run_id=run["id"], idempotency_key=step_key)
+        timeout = float(
+            step.get("timeout_seconds")
+            or get_setting(conn, "runtime.step_timeout_seconds", "60")
+            or 60
+        )
         try:
-            result = spec.handler(ctx, step["args"])
+            result = _run_with_timeout(spec.handler, ctx, step["args"], max(timeout, 0.1))
         except Exception as exc:  # noqa: BLE001 - recorded per attempt
             last_error = exc
             append_step(
@@ -458,6 +545,7 @@ def cancel_run(conn: sqlite3.Connection, run_id: str, actor: str = "user") -> Di
         raise ValueError("run {} is already {}".format(run_id, run["state"]))
     append_step(conn, run_id, "cancelled", {"actor": actor})
     _update_state(conn, run_id, "cancelled")
+    _release_lease(conn, run_id)
     obs.audit(conn, "run.cancelled", actor=actor, target=run_id, trace_id=run.get("trace_id"))
     obs.incr(conn, "runs.cancelled")
     return get_run(conn, run_id)
@@ -522,6 +610,7 @@ def _fail_run(
     if completed is not None:
         _update_checkpoint(conn, run_id, {"completed": sorted(completed)})
     _update_state(conn, run_id, "failed", error=error)
+    _release_lease(conn, run_id)
     append_step(conn, run_id, "run.failed", {"error": error})
     obs.incr(conn, "runs.failed")
     obs.audit(conn, "run.failed", actor="agent", target=run_id, detail={"error": error}, trace_id=run.get("trace_id"))

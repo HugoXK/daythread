@@ -93,7 +93,7 @@ class CliV3Test(unittest.TestCase):
         self.assertIn("backup OK", out)
 
         new_home = Path(self.home) / "new"
-        code, out, _ = run_cli(["--home", str(new_home), "restore", path])
+        code, out, _ = run_cli(["--home", str(new_home), "restore", path, "--trust"])
         self.assertEqual(code, 0)
         code, out, _ = run_cli(["--home", str(new_home), "fact", "list"])
         self.assertIn("maya", out)
@@ -236,6 +236,28 @@ class CliV3Test(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("not connected", err)
+
+    def test_relay_device_and_maintenance_cli(self):
+        code, out, _ = run_cli(
+            ["--home", self.home, "relay", "devices", "add", "laptop"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("laptop", out)
+        code, out, _ = run_cli(["--home", self.home, "relay", "devices", "list"])
+        self.assertEqual(code, 0)
+        self.assertIn("laptop", out)
+        code, out, _ = run_cli(
+            ["--home", self.home, "relay", "devices", "remove", "laptop"]
+        )
+        self.assertEqual(code, 0)
+
+        code, out, _ = run_cli(["--home", self.home, "maintenance", "stats"])
+        self.assertEqual(code, 0)
+        self.assertIn("counts", out)
+        code, out, _ = run_cli(
+            ["--home", self.home, "maintenance", "prune", "--older-than", "0"]
+        )
+        self.assertEqual(code, 0)
 
     def test_daemon_single_tick(self):
         code, out, _ = run_cli(["--home", self.home, "daemon", "--max-ticks", "1"])

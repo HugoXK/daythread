@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.7.0 — write actions and Microsoft 365.** Interfaces may still change. The
-goal is a small, correct, auditable core with tests (150 at this milestone), not
-feature breadth.
+**v0.8.0 — production hardening.** Interfaces may still change. The goal is a
+small, correct, auditable core with tests (175 at this milestone), not feature
+breadth.
 
 ## What works today
 
@@ -44,8 +44,9 @@ feature breadth.
   Read-only by default.
 - **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
   with a loopback callback, encrypted token storage and refresh, Google and
-  Microsoft 365 Calendar/Mail adapters, read sync, and approval-gated write
-  actions (create/move events, draft/send mail).
+  Microsoft 365 Calendar/Mail adapters, read sync with retry/backoff and
+  pagination, and approval-gated write actions (create/move events,
+  draft/send mail).
 - **Skills**: declarative plans with explicit capabilities, builtin skills,
   install/uninstall, and validation.
 - **Backup/restore**: checksummed versioned bundles, secret redaction, verify,
@@ -57,9 +58,13 @@ feature breadth.
   device-local and the relay only sees ciphertext.
 - **Daythread Bench v0**: memory insert/search, proactivity, runtime plans, and
   safety checks in a throwaway home.
-- **Local HTTP API**: bearer auth, rate limits, request IDs, pagination,
-  OpenAPI document, facts, runs, approvals, candidates, notifications,
-  connectors, models, ask, and metrics. Binds `127.0.0.1` only.
+- **Local HTTP API**: bearer auth, Host allowlist, persistent per-token rate
+  limits, request IDs, pagination, OpenAPI document, facts, runs, approvals,
+  candidates, notifications, connectors, models, ask, and Prometheus metrics.
+  Binds `127.0.0.1` only.
+- **Hardening**: atomic run leases, step timeouts, retention/pruning, signed
+  backups, encrypted model cache, sensitivity filters, MCP command allowlist,
+  OAuth revoke/scope checks, relay TLS/retention/device tokens.
 - **Operations**: schema migrations, `doctor`, structured audit log, metrics,
   config settings, JSON/Markdown export.
 
@@ -119,17 +124,20 @@ dt tick [--job morning|evening|maintenance]
 dt daemon [--interval 60] [--max-ticks N]
 dt notifications | scheduler list
 
-dt connector list|auth|connect|disconnect|sync|call|items
+dt connector list|auth|revoke|connect|disconnect|sync|call|items
 dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
 dt sync export|import|verify|push|pull|devices [--passphrase-env DAYTHREAD_PASSPHRASE]
 dt relay serve [--dir DIR] [--port 8788] [--token-env DAYTHREAD_RELAY_TOKEN]
+dt relay devices add|list|remove [--file PATH]
 dt bench [--facts N] [--runs N]
 
 dt config show|set
-dt metrics | audit | export [--format md|json]
-dt backup [--out DIR] | restore <file> [--verify] [--replace]
+dt metrics | audit | export [--format md|json] [--include-sensitive]
+dt maintenance stats|prune [--older-than N] [--keep-runs N] [--vacuum]
+dt fact list|search ... [--include-sensitive]
+dt backup [--out DIR] | restore <file> [--verify] [--replace] [--trust]
 dt serve [--host 127.0.0.1] [--port 8765] [--print-token] [--rotate-token]
 ```
 
@@ -205,10 +213,15 @@ dt connector sync microsoft.calendar
 dt connector call microsoft.mail create_draft \
   --arg to=maya@example.com --arg subject=Deck --arg body="Latest version."
 
-# Backup and restore.
+# Backup and restore (signed with the device master key).
 dt backup
 dt restore ~/.daythread/backups/daythread-*.json --verify
 dt restore ~/.daythread/backups/daythread-*.json
+dt restore ~/.daythread/backups/daythread-*.json --trust   # new device / new home
+
+# Retention and housekeeping.
+dt maintenance stats
+dt maintenance prune --older-than 90 --keep-runs 200 --vacuum
 
 # Encrypted secrets and E2EE file sync.
 dt secret set OPENAI_KEY            # prompts on a TTY, or pipe stdin
@@ -309,7 +322,17 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   calls are `external` by default.
 - **Local API**: `127.0.0.1` only, bearer token in a `0600` file, rate limited,
   no CORS.
-- **Backups**: checksummed, versioned, and redact known secrets.
+- **Backups**: checksummed, HMAC-signed, versioned, and redact known secrets.
+  `restore --trust` is required when the master key is not present.
+- **Runtime leases**: only one executor can claim a run; leases expire and are
+  released on completion/failure. Steps have timeouts on the main thread and
+  cancellation is checked between steps.
+- **Retention**: old events, steps, audit, usage, messages, and connector items
+  can be pruned; pending runs are always kept.
+- **Sensitivity**: `secret`/`health` facts are hidden from list/search/export/
+  MCP/briefs unless `--include-sensitive` is passed.
+- **API**: Host allowlist, persistent rate limits, no internal error details.
+- **MCP**: executable allowlist plus a scoped child environment.
 - **Secrets**: encrypted with AES-GCM; the master key is `0600` and never
   leaves the device. `secret:` references keep literals out of MCP configs.
 - **E2EE sync**: bundles are authenticated with AES-GCM; secrets are excluded
@@ -322,7 +345,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **Connector actions** are `external` by default: a run is created and must be
   approved before any event is created, moved, drafted, or sent.
 - **Relay**: stores only AES-GCM ciphertext, requires a bearer token, writes
-  `0600` files, and enforces a body-size limit. Put it behind TLS for remote use.
+  `0600` files, enforces a body-size limit, supports TLS/certificates, DELETE,
+  retention, and optional per-device tokens. Put it behind TLS for remote use.
 
 See [`SECURITY.md`](SECURITY.md) for reporting and scope.
 
@@ -346,7 +370,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
-5. Relay hardening: TLS, expiring tokens, device pairing, retention policy.
+5. Relay admin UX, expiring device tokens, and conflict resolution.
 
 ## License
 

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
 import time
-from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Deque, Dict, Optional, Tuple
@@ -27,6 +28,7 @@ from . import (
     runtime,
     scheduler,
 )
+from . import migrations
 from .db import connect, get_setting, init_db, is_initialized
 from .errors import DaythreadError
 
@@ -47,25 +49,6 @@ def ensure_token(home: Path, rotate: bool = False) -> str:
     return token
 
 
-class RateLimiter:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._buckets: Dict[str, Deque[float]] = {}
-
-    def check(self, key: str, limit: int, window: float = 60.0) -> bool:
-        if limit <= 0:
-            return True
-        now = time.monotonic()
-        with self._lock:
-            bucket = self._buckets.setdefault(key, deque())
-            while bucket and bucket[0] <= now - window:
-                bucket.popleft()
-            if len(bucket) >= limit:
-                return False
-            bucket.append(now)
-            return True
-
-
 class ApiServer:
     def __init__(
         self,
@@ -78,8 +61,7 @@ class ApiServer:
         self.home = Path(home)
         self.db_path = Path(db_path)
         self.token = ensure_token(self.home, rotate=rotate_token)
-        self.limiter = RateLimiter()
-        handler = _make_handler(self.home, self.db_path, self.token, self.limiter)
+        handler = _make_handler(self.home, self.db_path, self.token)
         self.httpd = ThreadingHTTPServer((host, port), handler)
         self.thread: Optional[threading.Thread] = None
 
@@ -102,7 +84,7 @@ class ApiServer:
         self.httpd.serve_forever()
 
 
-def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
+def _make_handler(home: Path, db_path: Path, token: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "daythread/{}".format(__version__)
 
@@ -123,27 +105,39 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             query = parse_qs(parsed.query)
-            if path == "/v1/health":
-                self._json(200, {"ok": True, "version": __version__}, request_id)
-                return
-            if not self._authorized():
-                self._json(401, {"error": "unauthorized", "request_id": request_id}, request_id)
-                return
             conn = connect(db_path)
             try:
                 if not is_initialized(conn):
                     init_db(conn)
+                else:
+                    migrations.migrate(conn)
+                if not self._host_allowed(conn):
+                    self._json(
+                        400,
+                        {"error": "invalid_host", "request_id": request_id},
+                        request_id,
+                    )
+                    return
+                if path == "/v1/health":
+                    self._json(200, {"ok": True, "version": __version__}, request_id)
+                    return
+                if not self._authorized():
+                    self._json(401, {"error": "unauthorized", "request_id": request_id}, request_id)
+                    return
                 try:
                     limit = int(get_setting(conn, "api.rate_limit_per_minute", "120") or 120)
                 except (TypeError, ValueError):
                     limit = 120
-                if not limiter.check(token, limit):
+                if not _rate_limit(conn, token, limit):
                     self._json(
                         429,
                         {"error": "rate_limited", "request_id": request_id},
                         request_id,
                         extra_headers={"Retry-After": "60"},
                     )
+                    return
+                if method == "GET" and path == "/metrics":
+                    self._text(200, _prometheus(conn), request_id)
                     return
                 body = self._read_body() if method == "POST" else {}
                 status, payload = self._route(method, path, query, body, conn)
@@ -158,10 +152,11 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
                 self._json(404, {"error": "not_found", "detail": str(exc), "request_id": request_id}, request_id)
             except ValueError as exc:
                 self._json(400, {"error": "validation_error", "detail": str(exc), "request_id": request_id}, request_id)
-            except Exception as exc:  # noqa: BLE001 - never leak tracebacks
+            except Exception:  # noqa: BLE001 - never leak tracebacks
+                obs.get_logger().exception("api request failed")
                 self._json(
                     500,
-                    {"error": type(exc).__name__, "detail": str(exc), "request_id": request_id},
+                    {"error": "internal_error", "request_id": request_id},
                     request_id,
                 )
             finally:
@@ -186,12 +181,20 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
             if method == "GET" and path == "/v1/facts":
                 limit, offset = _paging(query)
                 q = query.get("q", [""])[0]
+                include_sensitive = query.get("include_sensitive", ["0"])[0] in (
+                    "1",
+                    "true",
+                    "yes",
+                )
                 if q:
-                    return 200, memory.search_facts(conn, q)
+                    return 200, memory.search_facts(
+                        conn, q, include_sensitive=include_sensitive
+                    )
                 return 200, memory.list_facts(
                     conn,
                     subject_type=query.get("type", [None])[0],
                     subject_id=query.get("subject", [None])[0],
+                    include_sensitive=include_sensitive,
                     limit=limit,
                     offset=offset,
                 )
@@ -323,11 +326,35 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
                     str(body.get("text", "")),
                     task=str(body.get("task", "chat")),
                     use_cache=bool(body.get("use_cache", True)),
+                    home=home,
                 )
                 return 200, response.to_dict()
             if method == "GET" and path == "/v1/metrics":
                 return 200, obs.snapshot(conn)
             return 404, {"error": "not_found", "path": path}
+
+        def _host_allowed(self, conn) -> bool:
+            header = self.headers.get("Host", "")
+            if not header:
+                return False
+            host = _hostname(header)
+            allowed = get_setting(
+                conn, "api.allowed_hosts", "127.0.0.1,localhost,::1"
+            ) or "127.0.0.1,localhost,::1"
+            values = {item.strip().lower() for item in allowed.split(",") if item.strip()}
+            return host.lower() in values
+
+        def _text(self, status: int, body: str, request_id: Optional[str] = None) -> None:
+            encoded = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if request_id:
+                self.send_header("X-Request-Id", request_id)
+            self.end_headers()
+            self.wfile.write(encoded)
 
         def _authorized(self) -> bool:
             header = self.headers.get("Authorization", "")
@@ -369,6 +396,43 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
             self.wfile.write(encoded)
 
     return Handler
+
+
+def _hostname(header: str) -> str:
+    if header.startswith("["):
+        return header.split("]", 1)[0][1:]
+    return header.split(":", 1)[0]
+
+
+def _rate_limit(conn: sqlite3.Connection, token: str, limit: int, window: int = 60) -> bool:
+    if limit <= 0:
+        return True
+    key = hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+    now = int(time.time())
+    start = now - (now % window)
+    conn.execute(
+        """
+        INSERT INTO api_rate(key, window_start, count) VALUES(?, ?, 1)
+        ON CONFLICT(key, window_start) DO UPDATE SET count = count + 1
+        """,
+        (key, start),
+    )
+    conn.commit()
+    count = conn.execute(
+        "SELECT count FROM api_rate WHERE key = ? AND window_start = ?", (key, start)
+    ).fetchone()["count"]
+    if count == 1:
+        conn.execute("DELETE FROM api_rate WHERE window_start < ?", (start - 2 * window,))
+        conn.commit()
+    return int(count) <= limit
+
+
+def _prometheus(conn: sqlite3.Connection) -> str:
+    lines = ["# TYPE daythread_metric gauge"]
+    for name, value in obs.snapshot(conn).items():
+        safe = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+        lines.append("daythread_{} {}".format(safe, value))
+    return "\n".join(lines) + "\n"
 
 
 def _paging(query: Dict[str, list]) -> Tuple[int, int]:
@@ -426,6 +490,7 @@ def _openapi() -> Dict[str, Any]:
             "/v1/models": {"get": {"summary": "Model gateway config and usage"}},
             "/v1/ask": {"post": {"summary": "Ask the configured model"}},
             "/v1/metrics": {"get": {"summary": "Metrics snapshot"}},
+            "/metrics": {"get": {"summary": "Prometheus metrics"}},
         },
     }
 

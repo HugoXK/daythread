@@ -5,6 +5,7 @@ from pathlib import Path
 
 from daythread import mcp, runtime
 from daythread.db import connect, init_db
+from daythread.errors import ValidationError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_echo_server.py"
 
@@ -49,6 +50,18 @@ class McpTest(unittest.TestCase):
     def test_remove(self):
         mcp.remove_server(self.conn, "echo")
         self.assertEqual(mcp.list_servers(self.conn), [])
+
+    def test_disallowed_command(self):
+        with self.assertRaises(ValidationError):
+            mcp.add_server(self.conn, "bad", "sh", ["-c", "echo hi"])
+
+    def test_base_env_scrubbed(self):
+        import os
+
+        os.environ["DAYTHREAD_TEST_SECRET"] = "x"
+        env = mcp._base_env()
+        self.assertNotIn("DAYTHREAD_TEST_SECRET", env)
+        self.assertIn("PATH", env)
 
 
 if __name__ == "__main__":

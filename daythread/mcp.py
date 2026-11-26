@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -15,6 +16,8 @@ from .db import canonical, get_setting, json_load, row_to_dict, utc_now
 from .errors import McpError, ValidationError
 
 DEFAULT_TIMEOUT = 10.0
+DEFAULT_ALLOWED_COMMANDS = "python,python3,node,npx,uvx"
+BASE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT", "COMSPEC", "PATHEXT")
 
 
 class McpStdioClient:
@@ -44,7 +47,7 @@ class McpStdioClient:
     def start(self) -> None:
         if self.proc is not None:
             return
-        env = dict(os.environ)
+        env = _base_env()
         env.update(self.env)
         self.proc = subprocess.Popen(
             self.command,
@@ -152,6 +155,7 @@ def add_server(
         raise ValidationError("server id must be alphanumeric with _.-")
     if not command:
         raise ValidationError("command is required")
+    validate_command(conn, command)
     resolved_command = shutil.which(command) or command
     if Path(resolved_command).exists():
         resolved_command = str(Path(resolved_command).resolve())
@@ -234,8 +238,23 @@ def call(
     return result
 
 
+def validate_command(conn, command: str) -> None:
+    allowed = get_setting(conn, "mcp.allowed_commands", DEFAULT_ALLOWED_COMMANDS) or DEFAULT_ALLOWED_COMMANDS
+    names = {item.strip() for item in allowed.split(",") if item.strip()}
+    name = Path(command).name
+    if name not in names and not re.match(r"^python\d+(\.\d+)?$", name):
+        raise ValidationError(
+            "MCP command {} is not allowed (allowed: {})".format(name, ", ".join(sorted(names)))
+        )
+
+
+def _base_env() -> Dict[str, str]:
+    return {key: os.environ[key] for key in BASE_ENV_KEYS if key in os.environ}
+
+
 def _client(conn, server: Dict[str, Any], cwd: Optional[Path]) -> McpStdioClient:
     timeout = float(get_setting(conn, "mcp.timeout_seconds", str(DEFAULT_TIMEOUT)) or DEFAULT_TIMEOUT)
+    validate_command(conn, str(server["command"]))
     env = _resolve_env(conn, server.get("env") or {}, cwd)
     command = [str(server["command"])] + [str(item) for item in server.get("args", [])]
     return McpStdioClient(command, env=env, cwd=cwd, timeout=timeout)

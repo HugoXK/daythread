@@ -39,6 +39,7 @@ def _schemas() -> List[Dict[str, Any]]:
                 "properties": {
                     "q": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "include_sensitive": {"type": "boolean"},
                 },
                 "required": ["q"],
             },
@@ -189,7 +190,9 @@ def _call(conn, home: Path, name: str, arguments: Dict[str, Any]) -> Any:
         )
     if name == "daythread.memory_search":
         query = str(arguments.get("q", "")).strip()
-        facts = memory.search_facts(conn, query)
+        facts = memory.search_facts(
+            conn, query, include_sensitive=bool(arguments.get("include_sensitive", False))
+        )
         limit = int(arguments.get("limit", 20))
         return facts[: max(1, min(limit, 50))]
     if name == "daythread.task_list":

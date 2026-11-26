@@ -50,13 +50,13 @@ class BackupTest(unittest.TestCase):
         self._seed()
         path = backup.create_backup(self.conn, self.home)
         self.assertTrue(path.exists())
-        info = backup.verify_backup(path)
+        info = backup.verify_backup(path, home=self.home)
         self.assertEqual(info["counts"]["facts"], 1)
 
         new_home = Path(self.tmp.name) / "restored"
         new_conn = connect(new_home / "db.sqlite")
         init_db(new_conn)
-        counts = backup.restore_backup(new_conn, path)
+        counts = backup.restore_backup(new_conn, path, home=self.home)
         self.assertEqual(counts["facts"], 1)
         self.assertEqual(len(memory.list_facts(new_conn)), 1)
         self.assertEqual(new_conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
@@ -75,7 +75,7 @@ class BackupTest(unittest.TestCase):
         bundle["data"]["counts"]["facts"] = 999
         path.write_text(json.dumps(bundle), encoding="utf-8")
         with self.assertRaises(BackupError):
-            backup.load_backup(path)
+            backup.load_backup(path, home=self.home)
 
     def test_secrets_are_redacted(self):
         self._seed()

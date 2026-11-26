@@ -100,6 +100,52 @@ class ServerV3Test(unittest.TestCase):
         self.assertEqual(body["text"], "echo: hello")
         self.assertFalse(body["cached"])
 
+    def request_raw(self, method, path, headers=None):
+        request = urllib.request.Request(
+            "http://127.0.0.1:{}{}".format(self.server.port, path),
+            method=method,
+            headers=headers or {},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, response.read(), dict(response.headers)
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), dict(exc.headers)
+
+    def test_invalid_host(self):
+        status, body, _ = self.request(
+            "GET",
+            "/v1/version",
+            headers={"Host": "evil.example"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "invalid_host")
+
+    def test_prometheus_metrics(self):
+        status, body, headers = self.request_raw(
+            "GET", "/metrics", {"Authorization": "Bearer {}".format(self.token)}
+        )
+        self.assertEqual(status, 200)
+        self.assertIn(b"daythread_", body)
+        self.assertIn("text/plain", headers.get("Content-Type", ""))
+
+    def test_rate_limit_persists_across_servers(self):
+        conn = connect(self.db_path)
+        set_setting(conn, "api.rate_limit_per_minute", "1")
+        conn.close()
+        self.assertEqual(self.request("GET", "/v1/version")[0], 200)
+        second = ApiServer(self.home, self.db_path, port=0).start()
+        try:
+            request = urllib.request.Request(
+                "http://127.0.0.1:{}/v1/version".format(second.port),
+                headers={"Authorization": "Bearer {}".format(second.token)},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(request, timeout=5)
+            self.assertEqual(ctx.exception.code, 429)
+        finally:
+            second.stop()
+
     def test_models(self):
         status, body, _ = self.request("GET", "/v1/models")
         self.assertEqual(status, 200)

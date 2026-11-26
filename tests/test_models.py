@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from daythread import models
+from daythread import crypto, models
 from daythread.db import connect, init_db, set_setting
 from daythread.errors import BudgetExceededError, ProviderError, ValidationError
 
@@ -32,15 +32,18 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(response.provider, "local.echo")
         self.assertFalse(response.cached)
 
-    def test_cache_hit(self):
-        gateway = models.ModelGateway(self.conn)
-        messages = [{"role": "user", "content": "cached"}]
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_cache_hit_is_encrypted(self):
+        gateway = models.ModelGateway(self.conn, home=Path(self.tmp.name))
+        messages = [{"role": "user", "content": "cached-secret"}]
         first = gateway.chat(messages)
         second = gateway.chat(messages)
         self.assertFalse(first.cached)
         self.assertTrue(second.cached)
         rows = self.conn.execute("SELECT cached FROM model_usage ORDER BY ts").fetchall()
         self.assertEqual([row["cached"] for row in rows], [0, 1])
+        cached = self.conn.execute("SELECT response FROM model_cache").fetchone()["response"]
+        self.assertNotIn("cached-secret", cached)
 
     def test_budget(self):
         set_setting(self.conn, "model.daily_token_budget", "1")

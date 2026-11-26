@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0 — production hardening sprint
+
+- Runtime: atomic run leases + heartbeat, lease release, step timeouts on the
+  main thread, and cancellation checks between steps.
+- Retention: `maintenance.prune` removes old operational rows, keeps pending
+  runs, purges expired model cache, and runs in the scheduler maintenance job.
+- Backups: HMAC-signed with the device master key; `restore --trust` for
+  intentional cross-device restores.
+- Sensitivity: `secret`/`health` facts are hidden from list/search/export/MCP
+  and briefs by default; `--include-sensitive` opts in.
+- Model cache: encrypted with the master key; plaintext/legacy cache is purged.
+- API: Host allowlist, generic 500s, persistent per-token rate limiting, and a
+  Prometheus `/metrics` endpoint.
+- MCP: executable allowlist and scoped environment for child processes.
+- OAuth: per-connector file locks, revoke, and scope-drift detection.
+- Connectors: 429/5xx retry with backoff; Google/Microsoft pagination.
+- Relay: TLS termination, DELETE, retention, optional per-device tokens, and device admin CLI.
+- 175 unit tests.
+
 ## 0.7.0 — write actions and Microsoft 365
 
 - Microsoft identity platform OAuth provider.
