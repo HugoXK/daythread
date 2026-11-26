@@ -8,6 +8,11 @@ LATEST_VERSION = 5
 
 
 def current_version(conn: sqlite3.Connection) -> int:
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'"
+    ).fetchone()
+    if exists is None:
+        return 0
     row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if row is None:
         return 0

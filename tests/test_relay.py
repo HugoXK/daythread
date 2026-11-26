@@ -84,6 +84,69 @@ class RelayTest(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code, {}
 
+    def _request_full(self, method, path, token, data=None, headers=None):
+        request_headers = {"Authorization": "Bearer {}".format(token)}
+        request_headers.update(headers or {})
+        request = urllib.request.Request(
+            self.server.url + path,
+            data=data,
+            method=method,
+            headers=request_headers,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read()), dict(response.headers)
+        except urllib.error.HTTPError as exc:
+            body = exc.read()
+            return exc.code, json.loads(body) if body else {}, dict(exc.headers)
+
+    def test_etag_metadata_and_conflict(self):
+        bundle = sync.build_bundle(self.conn_a, "pw")
+        data = json.dumps(bundle).encode("utf-8")
+        status, body, headers = self._request_full(
+            "PUT",
+            "/v1/bundles/device-a",
+            "relay-token",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200)
+        etag = headers.get("ETag")
+        self.assertTrue(etag)
+
+        status, meta, _ = self._request_full(
+            "GET", "/v1/bundles/device-a/meta", "relay-token"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(meta["sha256"], body["sha256"])
+
+        status, _, _ = self._request_full(
+            "PUT",
+            "/v1/bundles/device-a",
+            "relay-token",
+            data=data,
+            headers={"Content-Type": "application/json", "If-Match": '"wrong"'},
+        )
+        self.assertEqual(status, 409)
+
+        status, _, _ = self._request_full(
+            "PUT",
+            "/v1/bundles/device-a",
+            "relay-token",
+            data=data,
+            headers={"Content-Type": "application/json", "If-Match": etag},
+        )
+        self.assertEqual(status, 200)
+
+    def test_expired_device_token(self):
+        self.server.device_tokens["device-a"] = {
+            "token": "device-token",
+            "expires_at": "2000-01-01T00:00:00+00:00",
+        }
+        self.assertEqual(
+            self._request("GET", "/v1/bundles/device-a", "device-token")[0], 401
+        )
+
     def test_delete(self):
         sync.push(
             self.conn_a,

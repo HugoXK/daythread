@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: python -m pip install -e ".[crypto]"
       - name: Compile
         run: python -m compileall -q daythread tests
       - name: Unit tests

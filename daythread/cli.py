@@ -31,6 +31,7 @@ from . import (
     obs,
     planner,
     policy,
+    privacy,
     proactivity,
     relay,
     runtime,
@@ -297,6 +298,17 @@ def build_parser() -> argparse.ArgumentParser:
     notifications = sub.add_parser("notifications", help="list scheduler notifications")
     notifications.add_argument("--limit", type=int, default=50)
 
+    privacy_p = sub.add_parser("privacy", help="DSAR-style subject export and forget")
+    privacy_sub = privacy_p.add_subparsers(dest="privacy_cmd", required=True)
+    privacy_export = privacy_sub.add_parser("export", help="export all data for a subject")
+    privacy_export.add_argument("--subject", required=True)
+    privacy_export.add_argument("--out", default=None)
+    privacy_forget = privacy_sub.add_parser("forget", help="forget a subject")
+    privacy_forget.add_argument("--subject", required=True)
+    privacy_forget.add_argument("--hard", action="store_true")
+    privacy_purge = privacy_sub.add_parser("purge", help="hard-delete old tombstones")
+    privacy_purge.add_argument("--older-than", type=int, default=30)
+
     maint = sub.add_parser("maintenance", help="retention and database housekeeping")
     maint_sub = maint.add_subparsers(dest="maintenance_cmd", required=True)
     maint_sub.add_parser("stats", help="show database sizes and row counts")
@@ -358,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--passphrase", default=None)
         command.add_argument("--passphrase-env", default="DAYTHREAD_PASSPHRASE")
     sync_pull.add_argument("--replace", action="store_true")
+    sync_push.add_argument("--if-match", default=None)
 
     relay_p = sub.add_parser("relay", help="self-hosted E2EE sync relay")
     relay_sub = relay_p.add_subparsers(dest="relay_cmd", required=True)
@@ -380,6 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("device_id")
         if action == "add":
             command.add_argument("--token", default=None)
+            command.add_argument("--expires-days", type=int, default=None)
 
     serve.add_argument("--print-token", action="store_true")
     serve.add_argument("--rotate-token", action="store_true")
@@ -537,6 +551,8 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                         item["ts"], item["status"], item["kind"], item["title"]
                     )
                 )
+    elif cmd == "privacy":
+        _privacy(args, conn)
     elif cmd == "maintenance":
         if args.maintenance_cmd == "stats":
             data = maintenance.stats(conn)
@@ -1256,6 +1272,7 @@ def _sync(args: argparse.Namespace, conn, home: Path) -> None:
             args.relay,
             _relay_token(args),
             remote_device=args.device,
+            if_match=args.if_match,
         )
         _print_json(result) if args.as_json else print(
             "pushed {} ({} bytes)".format(result["device_id"], result["size"])
@@ -1296,6 +1313,33 @@ def _sync(args: argparse.Namespace, conn, home: Path) -> None:
             "sync OK: {} ({} fact(s), schema v{})".format(
                 info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
             )
+        )
+
+
+def _privacy(args: argparse.Namespace, conn) -> None:
+    if args.privacy_cmd == "export":
+        data = privacy.export_subject(conn, args.subject)
+        if args.out:
+            path = Path(args.out).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            print("exported subject data to {}".format(path))
+        elif args.as_json:
+            _print_json(data)
+        else:
+            print(json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2))
+    elif args.privacy_cmd == "forget":
+        counts = privacy.forget_subject(conn, args.subject, hard=args.hard)
+        _print_json(counts) if args.as_json else print(
+            "forgot {}: {}".format(args.subject, json.dumps(counts, sort_keys=True))
+        )
+    elif args.privacy_cmd == "purge":
+        counts = privacy.purge_tombstones(conn, older_than_days=args.older_than)
+        _print_json(counts) if args.as_json else print(
+            "purged: {}".format(json.dumps(counts, sort_keys=True))
         )
 
 
@@ -1348,11 +1392,23 @@ def _relay_devices(args: argparse.Namespace, home: Path) -> None:
         if args.as_json:
             _print_json(devices)
         else:
-            for device_id, token in sorted(devices.items()):
-                print("{}  {}".format(device_id, token[:8] + "..."))
+            for device_id, entry in sorted(devices.items()):
+                if isinstance(entry, dict):
+                    token = str(entry.get("token", ""))
+                    expires = entry.get("expires_at", "-")
+                else:
+                    token = str(entry)
+                    expires = "-"
+                print("{}  {}  {}".format(device_id, token[:8] + "...", expires))
     elif args.relay_devices_cmd == "add":
         token = args.token or secrets.token_urlsafe(24)
-        devices[args.device_id] = token
+        if args.expires_days is not None:
+            expires = (
+                datetime.now(timezone.utc) + timedelta(days=args.expires_days)
+            ).replace(microsecond=0).isoformat()
+            devices[args.device_id] = {"token": token, "expires_at": expires}
+        else:
+            devices[args.device_id] = token
         relay.save_devices(path, devices)
         _print_json({"device_id": args.device_id, "token": token}) if args.as_json else print(
             "device {} token: {}".format(args.device_id, token)

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 — DSAR, test matrix, and packaging
+
+- Privacy/DSAR: `privacy.export_subject`, soft/hard forget, tombstone purge,
+  and `dt privacy export|forget|purge`.
+- Migration matrix tests from v1 → v5; empty DB, v4 plaintext cache purge, and
+  idempotent migration coverage.
+- Contract tests for CLI commands, OpenAPI paths, connector manifests, MCP
+  schemas, skills, and versioned formats.
+- Relay: per-device token expiry, ETag metadata, `If-Match` optimistic
+  concurrency, and `sync push --if-match`.
+- Load smoke (`make load`) with concurrent writers, Dockerfile, root CI, and a
+  coverage target.
+- 191 unit tests.
+
 ## 0.8.0 — production hardening sprint
 
 - Runtime: atomic run leases + heartbeat, lease release, step timeouts on the

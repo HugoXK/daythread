@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.8.0 — production hardening.** Interfaces may still change. The goal is a
-small, correct, auditable core with tests (175 at this milestone), not feature
-breadth.
+**v0.9.0 — DSAR, test matrix, and packaging.** Interfaces may still change. The
+goal is a small, correct, auditable core with tests (191 at this milestone), not
+feature breadth.
 
 ## What works today
 
@@ -66,7 +66,10 @@ breadth.
   backups, encrypted model cache, sensitivity filters, MCP command allowlist,
   OAuth revoke/scope checks, relay TLS/retention/device tokens.
 - **Operations**: schema migrations, `doctor`, structured audit log, metrics,
-  config settings, JSON/Markdown export.
+  config settings, JSON/Markdown export, migration matrix, contract tests, load
+  smoke, Dockerfile, and CI.
+- **Privacy/DSAR**: per-subject export, soft/hard forget, tombstone purge, and
+  audit records.
 
 No telemetry. Network access only happens if you explicitly configure an
 OpenAI-compatible provider or an MCP server.
@@ -129,6 +132,7 @@ dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
 dt sync export|import|verify|push|pull|devices [--passphrase-env DAYTHREAD_PASSPHRASE]
+dt sync push ... [--if-match ETAG]
 dt relay serve [--dir DIR] [--port 8788] [--token-env DAYTHREAD_RELAY_TOKEN]
 dt relay devices add|list|remove [--file PATH]
 dt bench [--facts N] [--runs N]
@@ -136,6 +140,7 @@ dt bench [--facts N] [--runs N]
 dt config show|set
 dt metrics | audit | export [--format md|json] [--include-sensitive]
 dt maintenance stats|prune [--older-than N] [--keep-runs N] [--vacuum]
+dt privacy export|forget|purge
 dt fact list|search ... [--include-sensitive]
 dt backup [--out DIR] | restore <file> [--verify] [--replace] [--trust]
 dt serve [--host 127.0.0.1] [--port 8765] [--print-token] [--rotate-token]
@@ -223,6 +228,16 @@ dt restore ~/.daythread/backups/daythread-*.json --trust   # new device / new ho
 dt maintenance stats
 dt maintenance prune --older-than 90 --keep-runs 200 --vacuum
 
+# Privacy / DSAR.
+dt privacy export --subject maya --out maya.json
+dt privacy forget --subject maya
+dt privacy forget --subject maya --hard
+dt privacy purge --older-than 30
+
+# Load smoke and container build.
+make load
+make docker
+
 # Encrypted secrets and E2EE file sync.
 dt secret set OPENAI_KEY            # prompts on a TTY, or pipe stdin
 dt sync export
@@ -264,7 +279,8 @@ CLI (dt) / HTTP API
        ├─ mcp_server.py  expose Daythread as an MCP stdio server
        ├─ models.py      provider routing, cache, budgets, usage
        ├─ scheduler.py   anchored ticks, notifications, maintenance
-       ├─ backup.py      checksummed backup/restore
+       ├─ backup.py      checksummed, HMAC-signed backup/restore
+       ├─ privacy.py     per-subject export/forget and tombstone purge
        ├─ crypto.py      optional AES-GCM/scrypt + encrypted secret vault
        ├─ sync.py        passphrase-encrypted E2EE file sync + relay transport
        ├─ relay.py       self-hosted opaque bundle relay
@@ -370,7 +386,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
-5. Relay admin UX, expiring device tokens, and conflict resolution.
+5. Server-side hard step timeouts and an OS-level MCP sandbox.
 
 ## License
 

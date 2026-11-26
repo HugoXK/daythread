@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -110,18 +111,31 @@ def _make_handler(owner: "RelayServer"):
                 self._json(200, _list_bundles(owner.directory))
                 return
             if path.startswith("/v1/bundles/"):
-                device = path.split("/")[3]
+                parts = path.split("/")
+                device = parts[3]
                 if not DEVICE_RE.match(device):
                     self._json(400, {"error": "invalid device id"})
                     return
                 if not self._authorized(owner.token, device):
                     self._json(401, {"error": "unauthorized"})
                     return
+                if len(parts) > 4 and parts[4] == "meta":
+                    meta = _bundle_meta(owner.directory, device)
+                    if meta is None:
+                        self._json(404, {"error": "not found"})
+                        return
+                    self._json(200, meta)
+                    return
                 bundle = _read_bundle(owner.directory, device)
                 if bundle is None:
                     self._json(404, {"error": "not found"})
                     return
-                self._json(200, bundle)
+                digest = _bundle_digest(owner.directory, device)
+                self._json(
+                    200,
+                    bundle,
+                    extra_headers={"ETag": '"{}"'.format(digest)} if digest else None,
+                )
                 return
             self._json(404, {"error": "not found"})
 
@@ -137,6 +151,13 @@ def _make_handler(owner: "RelayServer"):
             if not self._authorized(owner.token, device):
                 self._json(401, {"error": "unauthorized"})
                 return
+            if_match = self.headers.get("If-Match")
+            if if_match:
+                current = _bundle_digest(owner.directory, device)
+                expected = if_match.strip('"')
+                if current is None or current != expected:
+                    self._json(409, {"error": "version_conflict"})
+                    return
             try:
                 bundle = self._read_body()
             except ValueError as exc:
@@ -151,7 +172,12 @@ def _make_handler(owner: "RelayServer"):
                     return
             size = _write_bundle(owner.directory, device, bundle)
             owner.cleanup()
-            self._json(200, {"device_id": device, "size": size, "updated_at": utc_now()})
+            digest = _bundle_digest(owner.directory, device)
+            self._json(
+                200,
+                {"device_id": device, "size": size, "updated_at": utc_now(), "sha256": digest},
+                extra_headers={"ETag": '"{}"'.format(digest)} if digest else None,
+            )
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
@@ -178,7 +204,20 @@ def _make_handler(owner: "RelayServer"):
             if hmac.compare_digest(supplied, admin_token):
                 return True
             if device and device in owner.device_tokens:
-                return hmac.compare_digest(supplied, owner.device_tokens[device])
+                entry = owner.device_tokens[device]
+                if isinstance(entry, dict):
+                    expires_at = entry.get("expires_at")
+                    if expires_at:
+                        try:
+                            if datetime.fromisoformat(str(expires_at)) <= datetime.now(timezone.utc):
+                                return False
+                        except ValueError:
+                            return False
+                    token = entry.get("token")
+                else:
+                    token = entry
+                if token:
+                    return hmac.compare_digest(supplied, str(token))
             return False
 
         def _read_body(self) -> Dict[str, Any]:
@@ -194,20 +233,44 @@ def _make_handler(owner: "RelayServer"):
                 raise ValueError("JSON body must be an object")
             return data
 
-        def _json(self, status: int, payload: Any) -> None:
+        def _json(self, status: int, payload: Any, extra_headers: Optional[Dict[str, str]] = None) -> None:
             encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(encoded)
 
     return Handler
 
 
-def load_devices(path: Path) -> Dict[str, str]:
+def _bundle_digest(directory: Path, device: str) -> Optional[str]:
+    path = _bundle_path(directory, device)
+    if not path.exists():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _bundle_meta(directory: Path, device: str) -> Optional[Dict[str, Any]]:
+    path = _bundle_path(directory, device)
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return {
+        "device_id": device,
+        "size": stat.st_size,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        .replace(microsecond=0)
+        .isoformat(),
+    }
+
+
+def load_devices(path: Path) -> Dict[str, Any]:
     path = Path(path)
     if not path.exists():
         return {}
@@ -217,10 +280,10 @@ def load_devices(path: Path) -> Dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
-    return {str(key): str(value) for key, value in data.items()}
+    return {str(key): value for key, value in data.items()}
 
 
-def save_devices(path: Path, devices: Dict[str, str]) -> None:
+def save_devices(path: Path, devices: Dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(devices, ensure_ascii=False, indent=2, sort_keys=True)

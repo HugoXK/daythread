@@ -71,6 +71,11 @@ The baseline is designed to preserve these invariants:
 - MCP child processes use an executable allowlist and a scoped environment.
 - OAuth refreshes are serialized per connector; tokens can be revoked; scope
   drift requires re-authorization.
+- Privacy: subject export includes sensitive facts/history; soft forget
+  tombstones; hard forget removes facts, history, and matching events; tombstone
+  purge is explicit.
+- Relay device tokens can expire; `ETag`/`If-Match` prevents silent overwrites
+  when clients opt in.
 - No credentials or telemetry are collected.
 
 ## Out of scope
@@ -82,6 +87,8 @@ The baseline is designed to preserve these invariants:
 - Loss of the `master.key` file (encrypted secrets cannot be recovered).
 - An insecurely exposed relay or shared relay token. The relay is a self-hosted
   component; operators are responsible for TLS, network ACLs, and retention.
+- Backups restored with `--trust` bypass signature verification by design; only
+  use it for a backup you have transported securely.
 - A malicious MCP server that is allowlisted and explicitly registered. The
   allowlist is a guardrail, not an OS-level sandbox.
 - Partial side effects when a non-idempotent connector action times out. Such

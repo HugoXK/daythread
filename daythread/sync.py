@@ -129,6 +129,7 @@ def push(
     relay_url: str,
     relay_token: str,
     remote_device: Optional[str] = None,
+    if_match: Optional[str] = None,
 ) -> Dict[str, Any]:
     target = remote_device or device_id(conn)
     bundle = build_bundle(conn, passphrase)
@@ -137,6 +138,7 @@ def push(
         "{}/v1/bundles/{}".format(relay_url.rstrip("/"), quote(target, safe="")),
         relay_token,
         payload=bundle,
+        headers={"If-Match": if_match} if if_match else None,
     )
     obs.audit(conn, "sync.pushed", actor="user", target=target)
     return result
@@ -174,12 +176,14 @@ def _relay_request(
     token: str,
     payload: Optional[Dict[str, Any]] = None,
     opener=None,
+    headers: Optional[Dict[str, str]] = None,
 ) -> Any:
     if not token:
         raise ValueError("relay token is required")
     headers = {
         "Authorization": "Bearer {}".format(token),
         "Accept": "application/json",
+        **(headers or {}),
     }
     data = None
     if payload is not None:
