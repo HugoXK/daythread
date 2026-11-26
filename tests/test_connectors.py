@@ -18,7 +18,8 @@ class ConnectorTest(unittest.TestCase):
 
     def test_list_and_connect(self):
         items = connectors.list_connectors(self.conn)
-        self.assertEqual({item["id"] for item in items}, {"mock.gcal", "mock.gmail"})
+        ids = {item["id"] for item in items}
+        self.assertTrue({"mock.gcal", "mock.gmail", "google.calendar", "google.gmail"} <= ids)
         self.assertTrue(all(item["status"] == "available" for item in items))
         connected = connectors.connect(self.conn, "mock.gmail")
         self.assertEqual(connected["status"], "connected")

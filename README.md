@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.4.0 — security, sync, and evaluation.** Interfaces may still change. The
-goal is a small, correct, auditable core with tests (122 at this milestone), not
-feature breadth.
+**v0.5.0 — real OAuth connectors.** Interfaces may still change. The goal is a
+small, correct, auditable core with tests (135 at this milestone), not feature
+breadth.
 
 ## What works today
 
@@ -39,8 +39,9 @@ feature breadth.
   budget, and usage ledger.
 - **MCP**: JSON-RPC 2.0 stdio client, server registry, tool discovery, and
   `mcp.call` behind the approval gate.
-- **Connectors**: manifest-based registry, mock calendar/mail providers,
-  connect/disconnect, idempotent sync, and local item storage.
+- **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
+  with a loopback callback, encrypted token storage and refresh, Google
+  Calendar/Gmail read adapters, idempotent sync, and local item storage.
 - **Skills**: declarative plans with explicit capabilities, builtin skills,
   install/uninstall, and validation.
 - **Backup/restore**: checksummed versioned bundles, secret redaction, verify,
@@ -113,7 +114,7 @@ dt tick [--job morning|evening|maintenance]
 dt daemon [--interval 60] [--max-ticks N]
 dt notifications | scheduler list
 
-dt connector list|connect|disconnect|sync|items
+dt connector list|auth|connect|disconnect|sync|items
 dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
@@ -169,6 +170,15 @@ dt connector connect mock.gmail
 dt connector sync mock.gmail
 dt skill run inbox.triage
 
+# Real Google connectors (requires the crypto extra).
+python3 -m pip install -e ".[crypto]"
+dt config set oauth.google.client_id "<client-id>"
+dt config set oauth.google.client_secret_ref "env:GOOGLE_CLIENT_SECRET"
+dt connector auth google.calendar --no-browser   # open the printed URL
+dt connector auth google.gmail --no-browser
+dt connector sync google.calendar
+dt connector sync google.gmail
+
 # Backup and restore.
 dt backup
 dt restore ~/.daythread/backups/daythread-*.json --verify
@@ -187,6 +197,10 @@ dt serve --print-token
 dt serve --port 8765
 ```
 
+Register this loopback redirect URI in the Google Cloud console for the client:
+`http://127.0.0.1` (dynamic port). Tokens are AES-GCM encrypted at rest; sync
+happens only after an explicit authorization.
+
 ## Architecture
 
 ```text
@@ -199,7 +213,8 @@ CLI (dt) / HTTP API
        ├─ memory.py      facts, provenance, history, supersede, conflicts, extract
        ├─ ledger.py      append-only events + hash-chained steps
        ├─ proactivity.py signals, candidates, interrupt budget, feedback
-       ├─ connectors.py  manifests, mock providers, idempotent sync
+       ├─ connectors.py  manifests, mock + Google providers, idempotent sync
+       ├─ oauth.py       OAuth2 + PKCE, loopback callback, encrypted tokens
        ├─ mcp.py         JSON-RPC 2.0 stdio client + server registry
        ├─ models.py      provider routing, cache, budgets, usage
        ├─ scheduler.py   anchored ticks, notifications, maintenance
@@ -265,6 +280,9 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   leaves the device. `secret:` references keep literals out of MCP configs.
 - **E2EE sync**: bundles are authenticated with AES-GCM; secrets are excluded
   from sync by design.
+- **OAuth**: authorization-code + PKCE, `state` validation, loopback-only
+  callback, encrypted tokens, and refresh-on-expiry. Client secrets come from
+  `env:` or `secret:` references, never the command line.
 
 See [`SECURITY.md`](SECURITY.md) for reporting and scope.
 
@@ -284,7 +302,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 
 ## Roadmap
 
-1. Real OAuth connectors with contract tests and a review program.
+1. More OAuth providers (Microsoft 365, Feishu/Lark) and write scopes.
 2. E2EE multi-device transport (the file-based bundle is available today).
 3. Rust daemon + Tauri desktop shell, ported from this reference.
 4. Expand Daythread Bench into a public, reproducible benchmark suite.

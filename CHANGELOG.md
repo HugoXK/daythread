@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — real OAuth connectors
+
+- OAuth2 authorization-code + PKCE with a loopback callback server, state
+  validation, and configurable provider endpoints.
+- Encrypted OAuth token storage via `SecretVault`, with automatic refresh on
+  expiry.
+- Google Calendar and Gmail read connectors with injectable HTTP transport.
+- `dt connector auth <id>`; OAuth-aware sync/disconnect; connector sync tool
+  and API pass the local home for token access.
+- 135 unit tests.
+
 ## 0.4.0 — security, sync, and evaluation
 
 - Schema v4: encrypted `secrets` table and FTS5 `facts_fts` with external-content

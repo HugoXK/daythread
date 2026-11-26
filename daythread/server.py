@@ -263,7 +263,7 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
                 return 200, connectors.list_connectors(conn)
             if method == "POST" and path.startswith("/v1/connectors/") and path.endswith("/sync"):
                 connector_id = path.split("/")[3]
-                return 200, connectors.sync(conn, connector_id)
+                return 200, connectors.sync(conn, connector_id, home=home)
             if method == "GET" and path == "/v1/notifications":
                 return 200, scheduler.list_notifications(conn, limit=_paging(query)[0])
             if method == "POST" and path == "/v1/tick":

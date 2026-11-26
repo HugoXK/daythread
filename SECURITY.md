@@ -46,13 +46,16 @@ The baseline is designed to preserve these invariants:
 - Secrets are encrypted with AES-256-GCM; the master key is `0600` and stays on
   the device. E2EE sync bundles are authenticated with AES-GCM and exclude
   device-local secrets.
+- OAuth uses authorization-code + PKCE with `state` validation, a loopback-only
+  callback, read-only Google scopes, and AES-GCM encrypted tokens. Client
+  secrets are referenced via `env:` or `secret:`, not stored in plaintext.
 - No credentials or telemetry are collected.
 
 ## Out of scope
 
 - Vulnerabilities requiring a compromised local account or physical access.
-- Prompt-injection, model, and real OAuth connector issues (not implemented in
-  v0.2; mock connectors only).
+- Prompt-injection, model-provider, and third-party OAuth provider issues on
+  the provider side. Local OAuth flow and token storage are in scope.
 - Denial of service against a local single-user process.
 - Loss of the `master.key` file (encrypted secrets cannot be recovered).
 

@@ -402,7 +402,7 @@ def connector_sync(ctx: ToolContext, args: Dict[str, Any]) -> ToolResult:
     connector_id = str(args.get("connector", "")).strip()
     if not connector_id:
         raise ValueError("connector is required")
-    result = connectors.sync(ctx.conn, connector_id)
+    result = connectors.sync(ctx.conn, connector_id, home=ctx.home)
     return ToolResult(
         summary="synced {} ({} new item(s))".format(connector_id, result["inserted"]),
         data=result,

@@ -25,6 +25,7 @@ from . import (
     memory,
     migrations,
     models,
+    oauth,
     obs,
     planner,
     policy,
@@ -203,6 +204,10 @@ def build_parser() -> argparse.ArgumentParser:
     connector = sub.add_parser("connector", help="manage connectors")
     connector_sub = connector.add_subparsers(dest="connector_cmd", required=True)
     connector_sub.add_parser("list", help="list connectors")
+    connector_auth = connector_sub.add_parser("auth", help="authorize an OAuth connector")
+    connector_auth.add_argument("id")
+    connector_auth.add_argument("--no-browser", action="store_true")
+    connector_auth.add_argument("--timeout", type=float, default=300.0)
     connector_connect = connector_sub.add_parser("connect", help="connect a connector")
     connector_connect.add_argument("id")
     connector_connect.add_argument("--token-ref", default=None)
@@ -420,7 +425,7 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
             "feedback {}: {}".format(result["action"], result["target"][:8])
         )
     elif cmd == "connector":
-        _connector(args, conn)
+        _connector(args, conn, home)
     elif cmd == "skill":
         _skill(args, conn, home)
     elif cmd == "metrics":
@@ -806,7 +811,7 @@ def _candidate(args: argparse.Namespace, conn) -> None:
             print("{:.2f}  {:<12} {:<10} {}".format(item["score"], item["kind"], item["status"], item["title"]))
 
 
-def _connector(args: argparse.Namespace, conn) -> None:
+def _connector(args: argparse.Namespace, conn, home: Path) -> None:
     if args.connector_cmd == "list":
         items = connectors.list_connectors(conn)
         if args.as_json:
@@ -821,11 +826,24 @@ def _connector(args: argparse.Namespace, conn) -> None:
     elif args.connector_cmd == "connect":
         result = connectors.connect(conn, args.id, token_ref=args.token_ref)
         _print_json(result) if args.as_json else print("connected {}".format(result["id"]))
+    elif args.connector_cmd == "auth":
+        def on_url(url: str) -> None:
+            print("Open this URL to authorize {}:\n{}".format(args.id, url))
+
+        oauth.authorize(
+            conn,
+            home,
+            args.id,
+            open_browser=not args.no_browser,
+            timeout=args.timeout,
+            on_url=on_url,
+        )
+        print("authorized {}".format(args.id))
     elif args.connector_cmd == "disconnect":
-        result = connectors.disconnect(conn, args.id)
+        result = connectors.disconnect(conn, args.id, home=home)
         _print_json(result) if args.as_json else print("disconnected {}".format(result["id"]))
     elif args.connector_cmd == "sync":
-        result = connectors.sync(conn, args.id)
+        result = connectors.sync(conn, args.id, home=home)
         _print_json(result) if args.as_json else print(
             "synced {}: {} item(s), {} new".format(result["id"], result["items"], result["inserted"])
         )

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from daythread import crypto
 from daythread.cli import main
@@ -135,6 +136,18 @@ class CliV3Test(unittest.TestCase):
         self.assertEqual(code, 0)
         code, out, _ = run_cli(["--home", str(new_home), "secret", "list"])
         self.assertIn("no secrets", out)
+
+    def test_connector_auth_wiring(self):
+        with mock.patch(
+            "daythread.cli.oauth.authorize", return_value={"access_token": "x"}
+        ) as authorize:
+            code, out, _ = run_cli(
+                ["--home", self.home, "connector", "auth", "google.calendar", "--no-browser"]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("authorized google.calendar", out)
+        self.assertEqual(authorize.call_args.args[2], "google.calendar")
+        self.assertFalse(authorize.call_args.kwargs["open_browser"])
 
     def test_daemon_single_tick(self):
         code, out, _ = run_cli(["--home", self.home, "daemon", "--max-ticks", "1"])
