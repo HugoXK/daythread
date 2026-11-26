@@ -49,6 +49,11 @@ The baseline is designed to preserve these invariants:
 - OAuth uses authorization-code + PKCE with `state` validation, a loopback-only
   callback, read-only Google scopes, and AES-GCM encrypted tokens. Client
   secrets are referenced via `env:` or `secret:`, not stored in plaintext.
+- The MCP server is read-only by default; write tools require `--allow-write`,
+  and plan proposals from external agents require human approval.
+- The sync relay stores only opaque AES-GCM bundles, requires a bearer token,
+  writes `0600` files, and enforces a body-size limit. Run it behind TLS for
+  remote access and rotate the relay token.
 - No credentials or telemetry are collected.
 
 ## Out of scope
@@ -58,6 +63,8 @@ The baseline is designed to preserve these invariants:
   the provider side. Local OAuth flow and token storage are in scope.
 - Denial of service against a local single-user process.
 - Loss of the `master.key` file (encrypted secrets cannot be recovered).
+- An insecurely exposed relay or shared relay token. The relay is a self-hosted
+  component; operators are responsible for TLS, network ACLs, and retention.
 
 ## Hardening notes
 

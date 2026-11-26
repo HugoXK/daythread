@@ -71,6 +71,12 @@ class McpStdioClient:
             except Exception:  # noqa: BLE001
                 pass
         finally:
+            for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
             self.proc = None
 
     def request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:

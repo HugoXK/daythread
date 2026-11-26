@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 — MCP server and E2EE relay
+
+- Daythread can run as an MCP stdio server (`dt mcp serve`), exposing briefs,
+  memory search, tasks, calendar, approvals, connectors, and approval-gated
+  plan proposals. Read-only by default; `--allow-write` opts into memory writes.
+- `runtime.propose_plan(force_approval=True)` makes non-read plans require human
+  approval before execution.
+- Self-hosted relay (`dt relay serve`) stores only opaque encrypted sync
+  bundles; `dt sync push|pull|devices` move E2EE bundles between devices.
+- Relay writes are `0600`, token-authenticated, size-limited, and validated.
+- MCP client cleanup no longer leaks pipe handles.
+- 143 unit tests.
+
 ## 0.5.0 — real OAuth connectors
 
 - OAuth2 authorization-code + PKCE with a loopback callback server, state

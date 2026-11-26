@@ -122,6 +122,17 @@ class RuntimeV2Test(unittest.TestCase):
         self.assertEqual(blocked["state"], "failed")
         self.assertIn("absolute paths", blocked["error"])
 
+    def test_force_approval_even_for_write(self):
+        run = runtime.propose_plan(
+            self.conn,
+            self.home,
+            [{"id": "s1", "tool": "note.write", "args": {"path": "a.md", "content": "A"}}],
+            force_approval=True,
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        run = runtime.approve(self.conn, self.home, run["id"])
+        self.assertEqual(run["state"], "completed")
+
     def test_cancel_pending(self):
         run = runtime.propose(self.conn, self.home, "message.send", {"to": "maya@example.com"})
         self.assertEqual(run["state"], "pending_approval")

@@ -8,7 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from daythread import crypto
+from daythread import crypto, relay
 from daythread.cli import main
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_echo_server.py"
@@ -136,6 +136,66 @@ class CliV3Test(unittest.TestCase):
         self.assertEqual(code, 0)
         code, out, _ = run_cli(["--home", str(new_home), "secret", "list"])
         self.assertIn("no secrets", out)
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_sync_push_pull_cli(self):
+        server = relay.RelayServer(Path(self.home) / "relay", token="t", port=0).start()
+        try:
+            run_cli(
+                [
+                    "--home",
+                    self.home,
+                    "fact",
+                    "add",
+                    "--type",
+                    "person",
+                    "--subject",
+                    "maya",
+                    "--predicate",
+                    "role",
+                    "--value",
+                    "co-founder",
+                ]
+            )
+            code, out, _ = run_cli(
+                [
+                    "--home",
+                    self.home,
+                    "sync",
+                    "push",
+                    "--relay",
+                    server.url,
+                    "--token",
+                    "t",
+                    "--passphrase",
+                    "pw",
+                    "--device",
+                    "dev-a",
+                ]
+            )
+            self.assertEqual(code, 0)
+            other = Path(self.home) / "other"
+            code, out, _ = run_cli(
+                [
+                    "--home",
+                    str(other),
+                    "sync",
+                    "pull",
+                    "--relay",
+                    server.url,
+                    "--token",
+                    "t",
+                    "--passphrase",
+                    "pw",
+                    "--device",
+                    "dev-a",
+                ]
+            )
+            self.assertEqual(code, 0)
+            code, out, _ = run_cli(["--home", str(other), "fact", "list"])
+            self.assertIn("maya", out)
+        finally:
+            server.stop()
 
     def test_connector_auth_wiring(self):
         with mock.patch(

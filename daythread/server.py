@@ -224,6 +224,7 @@ def _make_handler(home: Path, db_path: Path, token: str, limiter: RateLimiter):
                     body.get("steps", []),
                     intent=body.get("intent"),
                     idempotency_key=self.headers.get("Idempotency-Key"),
+                    force_approval=bool(body.get("force_approval", False)),
                 )
                 return 201, run
             if method == "GET" and path.startswith("/v1/runs/"):

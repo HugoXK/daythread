@@ -90,6 +90,7 @@ def propose_plan(
     idempotency_key: Optional[str] = None,
     budget: Optional[Dict[str, Any]] = None,
     parent_run: Optional[str] = None,
+    force_approval: bool = False,
 ) -> Dict[str, Any]:
     normalized = planner.validate(steps)
 
@@ -102,6 +103,13 @@ def propose_plan(
 
     decisions = _decisions(conn, normalized)
     aggregate = _aggregate(decisions)
+    if force_approval and aggregate["state"] == "approved":
+        if any(item["risk"] != "read" for item in decisions):
+            aggregate = {
+                "decision": "ask",
+                "state": "pending_approval",
+                "risk": aggregate["risk"],
+            }
     run_budget = _default_budget(conn, budget)
     run_id = uuid4().hex
     now = utc_now()

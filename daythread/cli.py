@@ -30,6 +30,7 @@ from . import (
     planner,
     policy,
     proactivity,
+    relay,
     runtime,
     scheduler,
     skills,
@@ -271,6 +272,8 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_call.add_argument("tool")
     mcp_call.add_argument("--intent", default=None)
     mcp_call.add_argument("--arg", action="append", default=[], metavar="KEY=VALUE")
+    mcp_serve = mcp_sub.add_parser("serve", help="run Daythread as an MCP stdio server")
+    mcp_serve.add_argument("--allow-write", action="store_true")
 
     tick = sub.add_parser("tick", help="run one scheduler job")
     tick.add_argument("--job", choices=scheduler.JOBS, default=None)
@@ -321,6 +324,28 @@ def build_parser() -> argparse.ArgumentParser:
     for command in (sync_export, sync_import, sync_verify):
         command.add_argument("--passphrase", default=None)
         command.add_argument("--passphrase-env", default="DAYTHREAD_PASSPHRASE")
+
+    sync_push = sync_sub.add_parser("push", help="push an encrypted bundle to a relay")
+    sync_pull = sync_sub.add_parser("pull", help="pull an encrypted bundle from a relay")
+    sync_devices = sync_sub.add_parser("devices", help="list bundles on a relay")
+    for command in (sync_push, sync_pull, sync_devices):
+        command.add_argument("--relay", required=True)
+        command.add_argument("--token", default=None)
+        command.add_argument("--token-env", default="DAYTHREAD_RELAY_TOKEN")
+    for command in (sync_push, sync_pull):
+        command.add_argument("--device", default=None)
+        command.add_argument("--passphrase", default=None)
+        command.add_argument("--passphrase-env", default="DAYTHREAD_PASSPHRASE")
+    sync_pull.add_argument("--replace", action="store_true")
+
+    relay_p = sub.add_parser("relay", help="self-hosted E2EE sync relay")
+    relay_sub = relay_p.add_subparsers(dest="relay_cmd", required=True)
+    relay_serve = relay_sub.add_parser("serve", help="run the relay server")
+    relay_serve.add_argument("--dir", default=None)
+    relay_serve.add_argument("--host", default="127.0.0.1")
+    relay_serve.add_argument("--port", type=int, default=8788)
+    relay_serve.add_argument("--token", default=None)
+    relay_serve.add_argument("--token-env", default="DAYTHREAD_RELAY_TOKEN")
 
     serve.add_argument("--print-token", action="store_true")
     serve.add_argument("--rotate-token", action="store_true")
@@ -514,6 +539,8 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
         _secret(args, conn, home)
     elif cmd == "sync":
         _sync(args, conn, home)
+    elif cmd == "relay":
+        _relay(args, home)
     elif cmd == "serve":
         _serve(args, home, db_path)
     else:
@@ -968,6 +995,10 @@ def _mcp(args: argparse.Namespace, conn, home: Path) -> None:
         else:
             for tool in tools:
                 print("{:<20} {}".format(tool.get("name", ""), tool.get("description", "")))
+    elif args.mcp_cmd == "serve":
+        from . import mcp_server
+
+        mcp_server.serve(conn, home, read_only=not args.allow_write)
     elif args.mcp_cmd == "call":
         arguments = _parse_kv(args.arg)
         run = runtime.propose(
@@ -1110,8 +1141,39 @@ def _passphrase(args: argparse.Namespace) -> str:
 
 
 def _sync(args: argparse.Namespace, conn, home: Path) -> None:
+    if args.sync_cmd == "devices":
+        data = sync.list_remote(args.relay, _relay_token(args))
+        _print_json(data) if args.as_json else print(
+            json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2)
+        )
+        return
     passphrase = _passphrase(args)
-    if args.sync_cmd == "export":
+    if args.sync_cmd == "push":
+        result = sync.push(
+            conn,
+            home,
+            passphrase,
+            args.relay,
+            _relay_token(args),
+            remote_device=args.device,
+        )
+        _print_json(result) if args.as_json else print(
+            "pushed {} ({} bytes)".format(result["device_id"], result["size"])
+        )
+    elif args.sync_cmd == "pull":
+        counts = sync.pull(
+            conn,
+            home,
+            passphrase,
+            args.relay,
+            _relay_token(args),
+            remote_device=args.device,
+            replace=args.replace,
+        )
+        _print_json(counts) if args.as_json else print(
+            "pulled: {}".format(json.dumps(counts, sort_keys=True))
+        )
+    elif args.sync_cmd == "export":
         path = sync.export_sync(
             conn,
             home,
@@ -1135,6 +1197,34 @@ def _sync(args: argparse.Namespace, conn, home: Path) -> None:
                 info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
             )
         )
+
+
+def _relay_token(args: argparse.Namespace) -> str:
+    if args.token:
+        return args.token
+    value = os.environ.get(args.token_env)
+    if value:
+        return value
+    raise ValueError(
+        "relay token required (set {} or pass --token)".format(args.token_env)
+    )
+
+
+def _relay(args: argparse.Namespace, home: Path) -> None:
+    directory = Path(args.dir).expanduser() if args.dir else home / "relay"
+    token = args.token or os.environ.get(args.token_env) or None
+    server = relay.RelayServer(
+        directory,
+        token=token,
+        host=args.host,
+        port=args.port,
+    )
+    print("daythread relay on {}".format(server.url))
+    print("token: {}".format(server.token))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.stop()
 
 
 def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:

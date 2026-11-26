@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.5.0 — real OAuth connectors.** Interfaces may still change. The goal is a
-small, correct, auditable core with tests (135 at this milestone), not feature
-breadth.
+**v0.6.0 — MCP server and E2EE relay.** Interfaces may still change. The goal
+is a small, correct, auditable core with tests (143 at this milestone), not
+feature breadth.
 
 ## What works today
 
@@ -37,8 +37,11 @@ breadth.
 - **Model gateway**: pluggable providers, local deterministic provider,
   OpenAI-compatible HTTP provider, fallback chain, response cache, daily token
   budget, and usage ledger.
-- **MCP**: JSON-RPC 2.0 stdio client, server registry, tool discovery, and
-  `mcp.call` behind the approval gate.
+- **MCP client**: JSON-RPC 2.0 stdio client, server registry, tool discovery,
+  and `mcp.call` behind the approval gate.
+- **MCP server**: `dt mcp serve` exposes briefs, memory, tasks, calendar,
+  approvals, connectors, and approval-gated plan proposals to other agents.
+  Read-only by default.
 - **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
   with a loopback callback, encrypted token storage and refresh, Google
   Calendar/Gmail read adapters, idempotent sync, and local item storage.
@@ -48,8 +51,9 @@ breadth.
   merge or replace restore.
 - **Secrets**: optional AES-256-GCM + scrypt vault with a `0600` master key,
   and `secret:` references for MCP environment variables.
-- **E2EE file sync**: passphrase-encrypted bundles, verify and import; secrets
-  stay device-local.
+- **E2EE sync**: passphrase-encrypted bundles, verify/import, plus a
+  self-hosted relay (`dt relay serve`) for multi-device push/pull; secrets stay
+  device-local and the relay only sees ciphertext.
 - **Daythread Bench v0**: memory insert/search, proactivity, runtime plans, and
   safety checks in a throwaway home.
 - **Local HTTP API**: bearer auth, rate limits, request IDs, pagination,
@@ -105,7 +109,7 @@ dt policy show|set
 dt ask "<text>" [--task NAME] [--no-cache]
 dt model list|usage
 
-dt mcp add|list|remove|tools|call
+dt mcp add|list|remove|tools|call|serve
 dt signal add|list
 dt proactive [--deliver]
 dt candidate list
@@ -118,7 +122,8 @@ dt connector list|auth|connect|disconnect|sync|items
 dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
-dt sync export|import|verify [--passphrase-env DAYTHREAD_PASSPHRASE]
+dt sync export|import|verify|push|pull|devices [--passphrase-env DAYTHREAD_PASSPHRASE]
+dt relay serve [--dir DIR] [--port 8788] [--token-env DAYTHREAD_RELAY_TOKEN]
 dt bench [--facts N] [--runs N]
 
 dt config show|set
@@ -154,11 +159,15 @@ dt config set model.model gpt-4o-mini
 export OPENAI_API_KEY=...
 dt ask "summarize my day"
 
-# MCP server and tool call.
+# MCP client: connect to another MCP server.
 dt mcp add echo --command "python3 /path/to/server.py"
 dt mcp tools echo
 dt mcp call echo echo --arg text=hello
 dt approve <run-id>
+
+# MCP server: expose Daythread to Claude/Cursor (read-only by default).
+dt mcp serve
+dt mcp serve --allow-write
 
 # Scheduler and notifications.
 dt tick --job morning
@@ -189,6 +198,12 @@ dt secret set OPENAI_KEY            # prompts on a TTY, or pipe stdin
 dt sync export
 DAYTHREAD_PASSPHRASE=... dt sync import ~/.daythread/sync/daythread-sync-*.json --verify
 
+# E2EE multi-device relay.
+dt relay serve --port 8788
+DAYTHREAD_RELAY_TOKEN=... dt sync push --relay http://127.0.0.1:8788 --device laptop
+DAYTHREAD_RELAY_TOKEN=... dt sync pull --relay http://127.0.0.1:8788 --device laptop
+DAYTHREAD_RELAY_TOKEN=... dt sync devices --relay http://127.0.0.1:8788
+
 # Benchmark the local core.
 dt bench --facts 500 --runs 50
 
@@ -216,11 +231,13 @@ CLI (dt) / HTTP API
        ├─ connectors.py  manifests, mock + Google providers, idempotent sync
        ├─ oauth.py       OAuth2 + PKCE, loopback callback, encrypted tokens
        ├─ mcp.py         JSON-RPC 2.0 stdio client + server registry
+       ├─ mcp_server.py  expose Daythread as an MCP stdio server
        ├─ models.py      provider routing, cache, budgets, usage
        ├─ scheduler.py   anchored ticks, notifications, maintenance
        ├─ backup.py      checksummed backup/restore
        ├─ crypto.py      optional AES-GCM/scrypt + encrypted secret vault
-       ├─ sync.py        passphrase-encrypted E2EE file sync
+       ├─ sync.py        passphrase-encrypted E2EE file sync + relay transport
+       ├─ relay.py       self-hosted opaque bundle relay
        ├─ bench.py       Daythread Bench v0
        └─ skills.py      declarative, validated plans
   └─ brief.py            morning / evening briefs
@@ -283,6 +300,10 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **OAuth**: authorization-code + PKCE, `state` validation, loopback-only
   callback, encrypted tokens, and refresh-on-expiry. Client secrets come from
   `env:` or `secret:` references, never the command line.
+- **MCP server**: read-only by default; write tools are hidden unless
+  `--allow-write` is set; plans proposed by external agents require approval.
+- **Relay**: stores only AES-GCM ciphertext, requires a bearer token, writes
+  `0600` files, and enforces a body-size limit. Put it behind TLS for remote use.
 
 See [`SECURITY.md`](SECURITY.md) for reporting and scope.
 
@@ -303,10 +324,10 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 ## Roadmap
 
 1. More OAuth providers (Microsoft 365, Feishu/Lark) and write scopes.
-2. E2EE multi-device transport (the file-based bundle is available today).
-3. Rust daemon + Tauri desktop shell, ported from this reference.
-4. Expand Daythread Bench into a public, reproducible benchmark suite.
-5. Hosted deployment, observability backend, and compliance program.
+2. Rust daemon + Tauri desktop shell, ported from this reference.
+3. Expand Daythread Bench into a public, reproducible benchmark suite.
+4. Hosted deployment, observability backend, and compliance program.
+5. Relay hardening: TLS, expiring tokens, device pairing, retention policy.
 
 ## License
 
