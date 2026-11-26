@@ -1,0 +1,8 @@
+[run]
+source = daythread
+omit =
+    daythread/__main__.py
+
+[report]
+fail_under = 75
+show_missing = True

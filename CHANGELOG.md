@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0 — subprocess isolation and coverage gate
+
+- Isolated tool runner (`daythread.tool_runner`): external, connector, MCP, and
+  shell tools execute in a subprocess with a process-group kill on timeout.
+- Server worker threads now get a hard timeout for those tools, not just the CLI
+  main thread.
+- Mock connector action for isolated execution tests.
+- Coverage configuration with a 75% gate; CI covers the matrix with coverage.
+- 192 unit tests, ~77% line coverage with current subprocess measurement.
+
 ## 0.9.0 — DSAR, test matrix, and packaging
 
 - Privacy/DSAR: `privacy.export_subject`, soft/hard forget, tombstone purge,

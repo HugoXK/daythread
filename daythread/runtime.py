@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -15,7 +18,7 @@ from uuid import uuid4
 from . import obs, planner, policy
 from .db import canonical, get_setting, json_load, row_to_dict, utc_now
 from .ledger import append_step, get_steps
-from .tools import ToolContext, apply_undo, get_tool
+from .tools import ToolContext, ToolResult, apply_undo, get_tool
 
 RISK_ORDER = planner.RISK_ORDER
 FINAL_STATES = ("completed", "failed", "rejected", "denied", "undone", "cancelled", "undo_failed")
@@ -83,6 +86,88 @@ def _release_lease(conn: sqlite3.Connection, run_id: str) -> None:
         (run_id,),
     )
     conn.commit()
+
+
+def _db_file(conn: sqlite3.Connection) -> Optional[str]:
+    for row in conn.execute("PRAGMA database_list").fetchall():
+        if row["name"] == "main" and row["file"]:
+            return row["file"]
+    return None
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            proc.kill()
+    else:  # pragma: no cover - Windows
+        proc.kill()
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:  # pragma: no cover
+        pass
+
+
+def _run_isolated(
+    conn: sqlite3.Connection,
+    home: Path,
+    run_id: str,
+    step: Dict[str, Any],
+    timeout: float,
+) -> Optional[ToolResult]:
+    file_db = _db_file(conn)
+    if not file_db:
+        return None
+    step_key = "{}:{}".format(run_id, step["id"])
+    command = [
+        sys.executable,
+        "-m",
+        "daythread.tool_runner",
+        "--db",
+        file_db,
+        "--home",
+        str(home),
+        "--run-id",
+        run_id,
+        "--tool",
+        step["tool"],
+        "--args",
+        json.dumps(step["args"], ensure_ascii=False),
+        "--idempotency-key",
+        step_key,
+    ]
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        raise TimeoutError("isolated step timed out after {:.1f}s".format(timeout))
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(
+            "isolated tool produced no output: {}".format(stderr[-500:].strip())
+        )
+    try:
+        payload = json.loads(lines[-1])
+    except ValueError:
+        raise RuntimeError("isolated tool returned invalid JSON: {}".format(lines[-1][:200]))
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("error", "isolated tool failed"))
+    result = payload.get("result") or {}
+    return ToolResult(
+        summary=str(result.get("summary", "")),
+        undo=result.get("undo"),
+        irreversible=bool(result.get("irreversible", False)),
+        data=result.get("data") or {},
+    )
 
 
 def _run_with_timeout(fn, ctx, args, timeout: float):
@@ -474,7 +559,11 @@ def _execute_step(
             or 60
         )
         try:
-            result = _run_with_timeout(spec.handler, ctx, step["args"], max(timeout, 0.1))
+            result = None
+            if spec.isolated:
+                result = _run_isolated(conn, Path(home), run["id"], step, max(timeout, 0.1))
+            if result is None:
+                result = _run_with_timeout(spec.handler, ctx, step["args"], max(timeout, 0.1))
         except Exception as exc:  # noqa: BLE001 - recorded per attempt
             last_error = exc
             append_step(

@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 
 TOOLS = [
     {
@@ -12,7 +13,15 @@ TOOLS = [
             "properties": {"text": {"type": "string"}},
             "required": ["text"],
         },
-    }
+    },
+    {
+        "name": "slow",
+        "description": "Sleep, then return.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"seconds": {"type": "number"}},
+        },
+    },
 ]
 
 
@@ -41,6 +50,11 @@ def main():
         elif method == "tools/call":
             name = params.get("name")
             arguments = params.get("arguments") or {}
+            if name == "slow":
+                time.sleep(float(arguments.get("seconds", 5)))
+                result = {"content": [{"type": "text", "text": "slow done"}], "isError": False}
+                print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+                continue
             if name != "echo":
                 print(
                     json.dumps(

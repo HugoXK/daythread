@@ -60,8 +60,9 @@ The baseline is designed to preserve these invariants:
   writes `0600` files (including `devices.json`), enforces a body-size limit,
   supports TLS, DELETE, retention, and optional per-device tokens. Rotate tokens and use TLS remotely.
 - Runs use an atomic lease and heartbeat; only one executor can claim a run.
-  Steps have timeouts on the main thread and cancellation is checked between
-  steps.
+  External/MCP/connector/shell steps run in an isolated subprocess and are
+  killed by process group on timeout. Local steps use a main-thread signal
+  timeout; cancellation is checked between steps.
 - Backups are HMAC-signed with the device master key. Restoring a signed backup
   on a new home requires the key or an explicit `--trust`.
 - `secret`/`health` facts are hidden from list/search/export/MCP/briefs unless
@@ -90,7 +91,7 @@ The baseline is designed to preserve these invariants:
 - Backups restored with `--trust` bypass signature verification by design; only
   use it for a backup you have transported securely.
 - A malicious MCP server that is allowlisted and explicitly registered. The
-  allowlist is a guardrail, not an OS-level sandbox.
+  allowlist and subprocess isolation are guardrails, not an OS-level sandbox.
 - Partial side effects when a non-idempotent connector action times out. Such
   runs require review before resume.
 

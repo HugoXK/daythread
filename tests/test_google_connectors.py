@@ -285,28 +285,22 @@ class GoogleConnectorTest(unittest.TestCase):
         )
         self.assertEqual(result["result"]["id"], "created-1")
 
-        original = connectors.HTTP_OPENER
-        connectors.HTTP_OPENER = ActionOpener({"id": "runtime-event"})
-        try:
-            run = runtime.propose(
-                self.conn,
-                self.home,
-                "connector.call",
-                {
-                    "connector": "google.calendar",
-                    "action": "create_event",
-                    "arguments": {"title": "Runtime", "start": "2026-11-26T12:00:00Z"},
-                },
-            )
-            self.assertEqual(run["state"], "pending_approval")
-            run = runtime.approve(self.conn, self.home, run["id"])
-            self.assertEqual(run["state"], "completed")
-            executed = [step for step in run["steps"] if step["kind"] == "executed"][0]
-            self.assertEqual(
-                executed["payload"]["data"]["result"]["id"], "runtime-event"
-            )
-        finally:
-            connectors.HTTP_OPENER = original
+        connectors.connect(self.conn, "mock.gcal")
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "connector.call",
+            {
+                "connector": "mock.gcal",
+                "action": "write_note",
+                "arguments": {"content": "runtime-action"},
+            },
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        run = runtime.approve(self.conn, self.home, run["id"])
+        self.assertEqual(run["state"], "completed")
+        note = self.home / "notes" / "mock-action.md"
+        self.assertEqual(note.read_text(encoding="utf-8"), "runtime-action")
 
     @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_scope_mismatch_requires_reauthorization(self):

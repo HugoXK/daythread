@@ -12,6 +12,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from datetime import datetime, time as dtime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import quote
 
@@ -344,6 +345,13 @@ def _raw_email(args: Dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
 
+def _action_mock_write_note(conn, home, token, args, opener=None):
+    path = Path(home) / "notes" / "mock-action.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(args.get("content", "mock action")), encoding="utf-8")
+    return {"path": str(path)}
+
+
 def _action_google_calendar_create(conn, home, token, args, opener=None):
     title = str(args.get("title", "")).strip()
     start = str(args.get("start", "")).strip()
@@ -487,9 +495,13 @@ REGISTRY: Dict[str, ConnectorSpec] = {
         version="1.0.0",
         auth="mock",
         scopes=["calendar.read"],
-        actions=[{"name": "list_events", "risk": "read"}],
+        actions=[
+            {"name": "list_events", "risk": "read"},
+            {"name": "write_note", "risk": "external"},
+        ],
         sync=_sync_gcal,
         description="Deterministic local calendar provider for development.",
+        action_handlers={"write_note": _action_mock_write_note},
     ),
     "mock.gmail": ConnectorSpec(
         id="mock.gmail",

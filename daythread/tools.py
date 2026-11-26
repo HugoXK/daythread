@@ -29,6 +29,7 @@ class ToolContext:
     home: Path
     run_id: str
     idempotency_key: Optional[str] = None
+    db_path: Optional[Path] = None
 
 
 @dataclass
@@ -47,6 +48,7 @@ class ToolSpec:
     handler: Callable[[ToolContext, Dict[str, Any]], ToolResult]
     capability: str = "general"
     idempotent: bool = True
+    isolated: bool = False
 
 
 def _det_id(seed: str, length: int = 32) -> str:
@@ -501,14 +503,14 @@ TOOLS: Dict[str, ToolSpec] = {
     "calendar.move": ToolSpec("calendar.move", "write", "Move a local calendar event.", calendar_move, "calendar.write"),
     "calendar.list": ToolSpec("calendar.list", "read", "List local calendar events.", calendar_list, "calendar.read"),
     "message.draft": ToolSpec("message.draft", "write", "Write a message draft under outbox/drafts/.", message_draft, "messages.draft"),
-    "message.send": ToolSpec("message.send", "external", "Send a message (simulated, irreversible).", message_send, "messages.send", idempotent=False),
+    "message.send": ToolSpec("message.send", "external", "Send a message (simulated, irreversible).", message_send, "messages.send", idempotent=False, isolated=True),
     "memory.remember": ToolSpec("memory.remember", "write", "Remember a structured fact or extract from text.", memory_remember, "memory.write"),
     "memory.search": ToolSpec("memory.search", "read", "Search memory facts.", memory_search, "memory.read"),
     "brief.generate": ToolSpec("brief.generate", "read", "Generate a morning or evening brief.", brief_generate, "brief.read"),
-    "connector.sync": ToolSpec("connector.sync", "write", "Sync a connected connector into local state.", connector_sync, "connectors.sync"),
-    "connector.call": ToolSpec("connector.call", "external", "Call a write action on a connected connector.", connector_call, "connectors.action", idempotent=False),
-    "mcp.call": ToolSpec("mcp.call", "external", "Call a configured MCP server tool.", mcp_call, "mcp.call", idempotent=False),
-    "shell.run": ToolSpec("shell.run", "destructive", "Run an allowlisted command in the local sandbox.", shell_run, "shell.exec", idempotent=False),
+    "connector.sync": ToolSpec("connector.sync", "write", "Sync a connected connector into local state.", connector_sync, "connectors.sync", isolated=True),
+    "connector.call": ToolSpec("connector.call", "external", "Call a write action on a connected connector.", connector_call, "connectors.action", idempotent=False, isolated=True),
+    "mcp.call": ToolSpec("mcp.call", "external", "Call a configured MCP server tool.", mcp_call, "mcp.call", idempotent=False, isolated=True),
+    "shell.run": ToolSpec("shell.run", "destructive", "Run an allowlisted command in the local sandbox.", shell_run, "shell.exec", idempotent=False, isolated=True),
 }
 
 

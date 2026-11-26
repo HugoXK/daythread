@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from daythread import mcp, runtime
-from daythread.db import connect, init_db
+from daythread.db import connect, init_db, set_setting
 from daythread.errors import ValidationError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_echo_server.py"
@@ -42,6 +42,19 @@ class McpTest(unittest.TestCase):
         self.assertEqual(
             executed["payload"]["data"]["result"]["content"][0]["text"], "runtime"
         )
+
+    def test_isolated_step_timeout(self):
+        set_setting(self.conn, "runtime.step_timeout_seconds", "0.5")
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "mcp.call",
+            {"server": "echo", "tool": "slow", "arguments": {"seconds": 5}},
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        run = runtime.approve(self.conn, self.home, run["id"])
+        self.assertEqual(run["state"], "failed")
+        self.assertIn("timed out", run["error"])
 
     def test_unknown_server(self):
         with self.assertRaises(KeyError):

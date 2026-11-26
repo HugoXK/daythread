@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.9.0 — DSAR, test matrix, and packaging.** Interfaces may still change. The
-goal is a small, correct, auditable core with tests (191 at this milestone), not
-feature breadth.
+**v0.10.0 — subprocess isolation and coverage gate.** Interfaces may still
+change. The goal is a small, correct, auditable core with tests (192 at this
+milestone, ~77% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -62,9 +62,10 @@ feature breadth.
   limits, request IDs, pagination, OpenAPI document, facts, runs, approvals,
   candidates, notifications, connectors, models, ask, and Prometheus metrics.
   Binds `127.0.0.1` only.
-- **Hardening**: atomic run leases, step timeouts, retention/pruning, signed
-  backups, encrypted model cache, sensitivity filters, MCP command allowlist,
-  OAuth revoke/scope checks, relay TLS/retention/device tokens.
+- **Hardening**: atomic run leases, step timeouts, subprocess isolation for
+  external/MCP/connector/shell tools with process-group kill, retention/pruning,
+  signed backups, encrypted model cache, sensitivity filters, MCP command
+  allowlist, OAuth revoke/scope checks, relay TLS/retention/device tokens.
 - **Operations**: schema migrations, `doctor`, structured audit log, metrics,
   config settings, JSON/Markdown export, migration matrix, contract tests, load
   smoke, Dockerfile, and CI.
@@ -270,6 +271,7 @@ CLI (dt) / HTTP API
        ├─ planner.py     normalize / validate / toposort / preview / intents
        ├─ policy.py      read / write / external / destructive → allow / ask / deny
        ├─ tools.py       capabilities, risk tiers, undo recipes, sandbox exec
+       ├─ tool_runner.py subprocess entry point for isolated tools
        ├─ memory.py      facts, provenance, history, supersede, conflicts, extract
        ├─ ledger.py      append-only events + hash-chained steps
        ├─ proactivity.py signals, candidates, interrupt budget, feedback
@@ -341,8 +343,10 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **Backups**: checksummed, HMAC-signed, versioned, and redact known secrets.
   `restore --trust` is required when the master key is not present.
 - **Runtime leases**: only one executor can claim a run; leases expire and are
-  released on completion/failure. Steps have timeouts on the main thread and
-  cancellation is checked between steps.
+  released on completion/failure. External/MCP/connector/shell steps run in a
+  subprocess and are killed by process group on timeout, including server
+  worker threads. Local steps use a main-thread signal timeout; cancellation is
+  checked between steps.
 - **Retention**: old events, steps, audit, usage, messages, and connector items
   can be pruned; pending runs are always kept.
 - **Sensitivity**: `secret`/`health` facts are hidden from list/search/export/
@@ -386,7 +390,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
-5. Server-side hard step timeouts and an OS-level MCP sandbox.
+5. OS-level sandboxing for MCP/tool subprocesses and signed release artifacts.
 
 ## License
 

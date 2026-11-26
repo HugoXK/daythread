@@ -52,7 +52,8 @@ def migrate(conn: sqlite3.Connection) -> int:
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set:
-    return {row["name"] for row in conn.execute("PRAGMA table_info({})".format(table))}
+    rows = conn.execute("PRAGMA table_info({})".format(table)).fetchall()
+    return {row["name"] for row in rows}
 
 
 def _add_column(conn: sqlite3.Connection, table: str, name: str, ddl: str) -> None:
