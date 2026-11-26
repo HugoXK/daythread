@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daythread"
+version = "0.1.0"
+description = "Local-first, auditable personal agent baseline."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Hugo Xu" }]
+keywords = ["personal-agent", "local-first", "memory", "audit", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.scripts]
+dt = "daythread.cli:main"
+
+[project.urls]
+Design = "../docs/daythread-design.md"
+
+[tool.setuptools.packages.find]
+include = ["daythread*"]
