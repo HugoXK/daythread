@@ -49,6 +49,7 @@ class ToolSpec:
     capability: str = "general"
     idempotent: bool = True
     isolated: bool = False
+    network: bool = True
 
 
 def _det_id(seed: str, length: int = 32) -> str:
@@ -510,7 +511,7 @@ TOOLS: Dict[str, ToolSpec] = {
     "connector.sync": ToolSpec("connector.sync", "write", "Sync a connected connector into local state.", connector_sync, "connectors.sync", isolated=True),
     "connector.call": ToolSpec("connector.call", "external", "Call a write action on a connected connector.", connector_call, "connectors.action", idempotent=False, isolated=True),
     "mcp.call": ToolSpec("mcp.call", "external", "Call a configured MCP server tool.", mcp_call, "mcp.call", idempotent=False, isolated=True),
-    "shell.run": ToolSpec("shell.run", "destructive", "Run an allowlisted command in the local sandbox.", shell_run, "shell.exec", idempotent=False, isolated=True),
+    "shell.run": ToolSpec("shell.run", "destructive", "Run an allowlisted command in the local sandbox.", shell_run, "shell.exec", idempotent=False, isolated=True, network=False),
 }
 
 

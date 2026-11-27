@@ -1,4 +1,4 @@
-.PHONY: test ci coverage bench load docker demo install clean
+.PHONY: test ci coverage release bench load docker demo install clean
 
 test:
 	python3 -m unittest discover -s tests -v
@@ -7,8 +7,13 @@ ci: test
 	python3 -m compileall -q daythread tests
 
 coverage:
-	python3 -m coverage run -m unittest discover -s tests
+	rm -f .coverage .coverage.*
+	COVERAGE_PROCESS_START=.coveragerc python3 -m coverage run --parallel-mode --source=daythread -m unittest discover -s tests
+	python3 -m coverage combine
 	python3 -m coverage report -m
+
+release:
+	python3 scripts/release.py --build
 
 bench:
 	python3 -m daythread bench

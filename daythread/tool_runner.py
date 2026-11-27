@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+
+if os.environ.get("COVERAGE_PROCESS_START"):
+    try:
+        import coverage
+
+        coverage.process_startup()
+    except Exception:  # noqa: BLE001 - coverage is optional
+        pass
 
 from .db import connect, init_db
 from .tools import ToolContext, get_tool

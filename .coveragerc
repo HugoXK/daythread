@@ -1,5 +1,6 @@
 [run]
 source = daythread
+parallel = True
 omit =
     daythread/__main__.py
 

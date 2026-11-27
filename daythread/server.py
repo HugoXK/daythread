@@ -27,6 +27,7 @@ from . import (
     proactivity,
     runtime,
     scheduler,
+    ui,
     webhook,
 )
 from . import migrations
@@ -121,6 +122,13 @@ def _make_handler(home: Path, db_path: Path, token: str):
                     return
                 if path == "/v1/health":
                     self._json(200, {"ok": True, "version": __version__}, request_id)
+                    return
+                if method == "GET" and path == "/ui":
+                    enabled = get_setting(conn, "api.ui_enabled", "1") or "1"
+                    if enabled not in ("1", "true", "yes"):
+                        self._json(404, {"error": "not_found", "request_id": request_id}, request_id)
+                        return
+                    self._html(200, ui.html(token), request_id)
                     return
                 if method == "POST" and path.startswith("/v1/webhooks/"):
                     self._handle_webhook(path, conn, request_id)
@@ -348,6 +356,22 @@ def _make_handler(home: Path, db_path: Path, token: str):
             values = {item.strip().lower() for item in allowed.split(",") if item.strip()}
             return host.lower() in values
 
+        def _html(self, status: int, body: str, request_id: Optional[str] = None) -> None:
+            encoded = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
+            )
+            if request_id:
+                self.send_header("X-Request-Id", request_id)
+            self.end_headers()
+            self.wfile.write(encoded)
+
         def _text(self, status: int, body: str, request_id: Optional[str] = None) -> None:
             encoded = body.encode("utf-8")
             self.send_response(status)
@@ -557,6 +581,7 @@ def _openapi() -> Dict[str, Any]:
             "/v1/ask": {"post": {"summary": "Ask the configured model"}},
             "/v1/metrics": {"get": {"summary": "Metrics snapshot"}},
             "/metrics": {"get": {"summary": "Prometheus metrics"}},
+            "/ui": {"get": {"summary": "Local dashboard", "security": []}},
             "/v1/webhooks/{source}": {
                 "post": {"summary": "Signed webhook ingestion", "security": []}
             },

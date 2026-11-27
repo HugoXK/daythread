@@ -146,6 +146,12 @@ class ServerV3Test(unittest.TestCase):
         finally:
             second.stop()
 
+    def test_ui_page(self):
+        status, body, headers = self.request_raw("GET", "/ui")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Daythread", body)
+        self.assertIn("text/html", headers.get("Content-Type", ""))
+
     def test_models(self):
         status, body, _ = self.request("GET", "/v1/models")
         self.assertEqual(status, 200)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.0 — OS sandbox, release artifacts, and dashboard
+
+- macOS `sandbox-exec` backend for isolated tools: file-write allowlist and
+  network denial for `shell.run`; configurable via `sandbox.backend`.
+- Release pipeline: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
+  HMAC-signed release manifest (`make release`).
+- Subprocess coverage via `COVERAGE_PROCESS_START` + parallel data + combine.
+- Deployment assets: Docker Compose (API + relay), nginx TLS template, systemd
+  units, and operations README.
+- Local web dashboard: `dt ui` / `GET /ui`, CSP-protected, approve/reject/undo,
+  briefs, runs, and memory search.
+- 221 unit tests.
+
 ## 0.14.0 — incremental sync cursors
 
 - Schema v7: persistent `connector_state` per connector.

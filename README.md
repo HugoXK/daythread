@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.14.0 — incremental sync cursors.** Interfaces may still change. The goal is
-a small, correct, auditable core with tests (213 at this milestone, ~77% line
-coverage, 75% gate), not feature breadth.
+**v0.15.0 — OS sandbox, release artifacts, and dashboard.** Interfaces may still
+change. The goal is a small, correct, auditable core with tests (221 at this
+milestone, ~77% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -66,14 +66,19 @@ coverage, 75% gate), not feature breadth.
   candidates, notifications, connectors, models, ask, signed webhooks, and
   Prometheus metrics. Binds `127.0.0.1` only.
 - **Hardening**: atomic run leases, step timeouts, subprocess isolation for
-  external/MCP/connector/shell tools with process-group kill, retention/pruning,
-  signed backups, encrypted model cache, sensitivity filters, MCP command
-  allowlist, OAuth revoke/scope checks, relay TLS/retention/device tokens.
+  external/MCP/connector/shell tools with process-group kill, optional macOS
+  `sandbox-exec` file-write/network sandbox, retention/pruning, signed backups,
+  encrypted model cache, sensitivity filters, MCP command allowlist, OAuth
+  revoke/scope checks, relay TLS/retention/device tokens.
 - **Operations**: schema migrations, `doctor`, structured audit log, metrics,
   config settings, JSON/Markdown export, migration matrix, contract tests, load
   smoke, Dockerfile, and CI.
 - **Privacy/DSAR**: per-subject export, soft/hard forget, tombstone purge, and
   audit records.
+- **Dashboard**: `dt ui` serves a loopback dashboard for briefs, approvals,
+  runs, and memory search.
+- **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
+  HMAC-signed release manifest.
 
 No telemetry. Network access only happens if you explicitly configure an
 OpenAI-compatible provider or an MCP server.
@@ -142,6 +147,7 @@ dt relay serve [--dir DIR] [--port 8788] [--token-env DAYTHREAD_RELAY_TOKEN]
 dt relay devices add|list|remove [--file PATH]
 dt bench [--facts N] [--runs N]
 
+dt ui [--port 8765] [--no-browser]
 dt config show|set
 dt metrics | audit | export [--format md|json] [--include-sensitive]
 dt maintenance stats|prune [--older-than N] [--keep-runs N] [--vacuum]
@@ -255,9 +261,14 @@ dt privacy forget --subject maya
 dt privacy forget --subject maya --hard
 dt privacy purge --older-than 30
 
-# Load smoke and container build.
+# Load smoke, coverage, release, container build.
 make load
+make coverage
+make release
 make docker
+
+# Local dashboard.
+dt ui
 
 # Encrypted secrets and E2EE file sync.
 dt secret set OPENAI_KEY            # prompts on a TTY, or pipe stdin
@@ -292,6 +303,8 @@ CLI (dt) / HTTP API
        ├─ policy.py      read / write / external / destructive → allow / ask / deny
        ├─ tools.py       capabilities, risk tiers, undo recipes, sandbox exec
        ├─ tool_runner.py subprocess entry point for isolated tools
+       ├─ sandbox.py    macOS sandbox-exec profile for isolated tools
+       ├─ ui.py         loopback dashboard HTML
        ├─ memory.py      facts, provenance, history, supersede, conflicts, extract
        ├─ ledger.py      append-only events + hash-chained steps
        ├─ proactivity.py signals, candidates, interrupt budget, feedback
@@ -390,6 +403,12 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   `dt connector reset` clears it manually.
 - **MCP resources**: sensitive (`secret`/`health`) facts are excluded and cannot
   be read by URI.
+- **OS sandbox**: `sandbox.backend=sandbox-exec` restricts file writes to the
+  Daythread home/temp and denies network for `shell.run` (macOS).
+- **Dashboard**: loopback-only, CSP-protected, and embeds the bearer token only
+  in the local page. Disable with `api.ui_enabled=0`.
+- **Release**: SHA256SUMS + SBOM; set `DAYTHREAD_RELEASE_KEY` to HMAC-sign the
+  manifest.
 - **MCP server**: read-only by default; write tools are hidden unless
   `--allow-write` is set; plans proposed by external agents require approval.
 - **Connector actions** are `external` by default: a run is created and must be
@@ -421,7 +440,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
-5. OS-level sandboxing for MCP/tool subprocesses and signed release artifacts.
+5. Linux/Docker sandboxing and cosign/SBOM attestations for releases.
 
 ## License
 

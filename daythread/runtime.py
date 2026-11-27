@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from . import obs, planner, policy
+from . import obs, planner, policy, sandbox
 from .db import canonical, get_setting, json_load, row_to_dict, utc_now
 from .ledger import append_step, get_steps
 from .tools import ToolContext, ToolResult, apply_undo, get_tool
@@ -115,6 +115,7 @@ def _run_isolated(
     run_id: str,
     step: Dict[str, Any],
     timeout: float,
+    allow_network: bool = True,
 ) -> Optional[ToolResult]:
     file_db = _db_file(conn)
     if not file_db:
@@ -137,6 +138,7 @@ def _run_isolated(
         "--idempotency-key",
         step_key,
     ]
+    command = sandbox.wrap(command, conn, Path(home), allow_network=allow_network)
     proc = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -144,6 +146,7 @@ def _run_isolated(
         text=True,
         start_new_session=True,
         cwd=str(Path(__file__).resolve().parent.parent),
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
@@ -561,7 +564,14 @@ def _execute_step(
         try:
             result = None
             if spec.isolated:
-                result = _run_isolated(conn, Path(home), run["id"], step, max(timeout, 0.1))
+                result = _run_isolated(
+                    conn,
+                    Path(home),
+                    run["id"],
+                    step,
+                    max(timeout, 0.1),
+                    allow_network=spec.network,
+                )
             if result is None:
                 result = _run_with_timeout(spec.handler, ctx, step["args"], max(timeout, 0.1))
         except Exception as exc:  # noqa: BLE001 - recorded per attempt

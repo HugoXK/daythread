@@ -10,6 +10,7 @@ import secrets
 import shlex
 import sys
 import tempfile
+import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -259,6 +260,10 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--format", choices=("md", "json"), default="md")
     exp.add_argument("--out", default=None, help="write to a file instead of stdout")
     exp.add_argument("--include-sensitive", action="store_true")
+
+    ui_p = sub.add_parser("ui", help="open the local dashboard")
+    ui_p.add_argument("--port", type=int, default=8765)
+    ui_p.add_argument("--no-browser", action="store_true")
 
     serve = sub.add_parser("serve", help="start the local HTTP API")
     serve.add_argument("--host", default="127.0.0.1")
@@ -651,6 +656,8 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
             _relay_devices(args, home)
         else:
             _relay(args, home)
+    elif cmd == "ui":
+        _ui(args, home, db_path)
     elif cmd == "serve":
         _serve(args, home, db_path)
     else:
@@ -1492,6 +1499,18 @@ def _relay_devices(args: argparse.Namespace, home: Path) -> None:
         devices.pop(args.device_id, None)
         relay.save_devices(path, devices)
         print("removed device {}".format(args.device_id))
+
+
+def _ui(args: argparse.Namespace, home: Path, db_path: Path) -> None:
+    server = ApiServer(home, db_path, host="127.0.0.1", port=args.port)
+    url = "http://127.0.0.1:{}/ui".format(server.port)
+    print("daythread UI on {}".format(url))
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.stop()
 
 
 def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:

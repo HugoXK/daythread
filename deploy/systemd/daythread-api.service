@@ -1,0 +1,15 @@
+[Unit]
+Description=Daythread local API
+After=network.target
+
+[Service]
+Type=simple
+Environment=DAYTHREAD_HOME=%h/.daythread
+ExecStart=/usr/local/bin/dt serve --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

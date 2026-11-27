@@ -1,0 +1,16 @@
+[Unit]
+Description=Daythread E2EE sync relay
+After=network.target
+
+[Service]
+Type=simple
+Environment=DAYTHREAD_HOME=%h/.daythread
+EnvironmentFile=%h/.config/daythread/relay.env
+ExecStart=/usr/local/bin/dt relay serve --host 127.0.0.1 --port 8788 --retention-days 30
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

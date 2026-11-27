@@ -82,6 +82,10 @@ The baseline is designed to preserve these invariants:
   per-source secrets in the encrypted vault, rate limits, and dedupe.
 - Sync cursors (`syncToken`, `deltaLink`) are stored per connector and may contain
   opaque provider identifiers; they are not treated as secrets but are local-only.
+- `dt ui` serves on loopback and embeds the bearer token in the page; disable it
+  with `api.ui_enabled=0` if that model is not acceptable.
+- Release manifests can be HMAC-signed with `DAYTHREAD_RELEASE_KEY`; unsigned
+  releases are checksummed but not authenticated.
 - MCP resources never expose `secret`/`health` facts.
 - Relay device tokens can expire; `ETag`/`If-Match` prevents silent overwrites
   when clients opt in.
@@ -99,7 +103,8 @@ The baseline is designed to preserve these invariants:
 - Backups restored with `--trust` bypass signature verification by design; only
   use it for a backup you have transported securely.
 - A malicious MCP server that is allowlisted and explicitly registered. The
-  allowlist and subprocess isolation are guardrails, not an OS-level sandbox.
+  allowlist and subprocess isolation are guardrails; macOS `sandbox-exec` is an
+  optional OS-level sandbox, not a cross-platform container.
 - Partial side effects when a non-idempotent connector action times out. Such
   runs require review before resume.
 

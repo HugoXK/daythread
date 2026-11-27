@@ -22,5 +22,7 @@ jobs:
         run: python -m compileall -q daythread tests
       - name: Coverage
         run: |
-          python -m coverage run --source=daythread -m unittest discover -s tests -v
+          rm -f .coverage .coverage.*
+          COVERAGE_PROCESS_START=.coveragerc python -m coverage run --parallel-mode --source=daythread -m unittest discover -s tests -v
+          python -m coverage combine
           python -m coverage report -m
