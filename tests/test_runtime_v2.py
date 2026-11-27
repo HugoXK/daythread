@@ -109,6 +109,35 @@ class RuntimeV2Test(unittest.TestCase):
         self.assertEqual(resumed["state"], "completed")
         self.assertEqual(calls["n"], 2)
 
+    def test_resume_blocks_failed_non_idempotent_external_step(self):
+        calls = {"n": 0}
+
+        def flaky_external(ctx, args):
+            calls["n"] += 1
+            raise TimeoutError("simulated external timeout after side effect")
+
+        TOOLS["test.external_timeout"] = ToolSpec(
+            "test.external_timeout",
+            "external",
+            "non-idempotent external step that always times out",
+            flaky_external,
+            "test",
+            idempotent=False,
+        )
+        run = runtime.propose(
+            self.conn, self.home, "test.external_timeout", {}, intent="resume guard"
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        failed = runtime.approve(self.conn, self.home, run["id"])
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(calls["n"], 1)
+
+        with self.assertRaises(ValueError) as caught:
+            runtime.resume_run(self.conn, self.home, run["id"])
+        self.assertIn("uncertain", str(caught.exception).lower())
+        self.assertEqual(calls["n"], 1)
+        self.assertNotEqual(runtime.get_run(self.conn, run["id"])["state"], "completed")
+
     def test_shell_is_allowlisted(self):
         run = runtime.propose(self.conn, self.home, "shell.run", {"command": "echo hello"})
         self.assertEqual(run["state"], "pending_approval")

@@ -540,7 +540,7 @@ def _execute_step(
             },
         )
         return
-    if existing and existing["status"] == "started" and not spec.idempotent:
+    if existing and not spec.idempotent and existing["status"] in ("started", "failed"):
         raise RuntimeError(
             "step {} has an uncertain external outcome; review before resume".format(step["id"])
         )
@@ -633,10 +633,40 @@ def _execute_step(
         raise last_error
 
 
+def _uncertain_non_idempotent_steps(
+    conn: sqlite3.Connection, run: Dict[str, Any]
+) -> List[str]:
+    """Return non-idempotent steps whose external outcome is not known."""
+    uncertain = []
+    for step in (run.get("plan") or {}).get("steps", []):
+        try:
+            spec = get_tool(step["tool"])
+        except KeyError:
+            continue
+        if spec.idempotent:
+            continue
+        row = conn.execute(
+            "SELECT status FROM idempotency WHERE key = ?",
+            ("{}:{}".format(run["id"], step["id"]),),
+        ).fetchone()
+        if row is not None and row["status"] in ("started", "failed"):
+            uncertain.append(step["id"])
+    return uncertain
+
+
 def resume_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, Any]:
     run = get_run(conn, run_id)
     if run["state"] not in ("failed", "paused", "running", "approved"):
         raise ValueError("run {} is {}, cannot resume".format(run_id, run["state"]))
+    if run["state"] == "failed":
+        uncertain = _uncertain_non_idempotent_steps(conn, run)
+        if uncertain:
+            raise ValueError(
+                "run {} has an uncertain external outcome for non-idempotent step(s) {}; "
+                "refusing to resume. Verify the external side effect, then inspect "
+                "`dt show {}` and `dt ledger {} --verify`; start a new run if a retry "
+                "is needed.".format(run_id, ", ".join(uncertain), run_id, run_id)
+            )
     append_step(conn, run_id, "resumed", {"from_state": run["state"]})
     _update_state(conn, run_id, "approved")
     obs.incr(conn, "runs.resumed")
