@@ -80,6 +80,8 @@ The baseline is designed to preserve these invariants:
   bounded; streaming does not bypass the daily token budget.
 - Webhooks: HMAC-SHA256 over `timestamp.body`, timestamp replay window,
   per-source secrets in the encrypted vault, rate limits, and dedupe.
+- Sync cursors (`syncToken`, `deltaLink`) are stored per connector and may contain
+  opaque provider identifiers; they are not treated as secrets but are local-only.
 - MCP resources never expose `secret`/`health` facts.
 - Relay device tokens can expire; `ETag`/`If-Match` prevents silent overwrites
   when clients opt in.

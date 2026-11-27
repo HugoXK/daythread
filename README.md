@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.13.0 — signed webhooks and MCP resources.** Interfaces may still change.
-The goal is a small, correct, auditable core with tests (209 at this milestone,
-~77% line coverage, 75% gate), not feature breadth.
+**v0.14.0 — incremental sync cursors.** Interfaces may still change. The goal is
+a small, correct, auditable core with tests (213 at this milestone, ~77% line
+coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -47,8 +47,9 @@ The goal is a small, correct, auditable core with tests (209 at this milestone,
 - **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
   with a loopback callback, encrypted token storage and refresh, Google and
   Microsoft 365 Calendar/Mail adapters, Feishu/Lark Calendar and Tasks
-  adapters, read sync with retry/backoff and pagination, and approval-gated
-  write actions (create/move events, draft/send mail, create tasks).
+  adapters, read sync with retry/backoff, pagination, and incremental cursors
+  (Google `syncToken`, Microsoft `deltaLink`), and approval-gated write actions
+  (create/move events, draft/send mail, create tasks).
 - **Skills**: declarative plans with explicit capabilities, builtin skills,
   install/uninstall, and validation.
 - **Backup/restore**: checksummed versioned bundles, secret redaction, verify,
@@ -131,7 +132,7 @@ dt tick [--job morning|evening|maintenance]
 dt daemon [--interval 60] [--max-ticks N]
 dt notifications | scheduler list
 
-dt connector list|auth|revoke|connect|disconnect|sync|call|items
+dt connector list|auth|revoke|connect|disconnect|sync|state|reset|call|items
 dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
@@ -212,6 +213,8 @@ dt connector auth google.calendar --no-browser   # open the printed URL
 dt connector auth google.gmail --no-browser
 dt connector sync google.calendar
 dt connector sync google.gmail
+dt connector state google.calendar
+dt connector sync google.calendar --reset
 
 # Write actions (always approved before execution).
 dt connector call google.calendar create_event \
@@ -382,6 +385,9 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   retries use bounded exponential backoff; streaming is opt-in.
 - **Webhooks**: HMAC-SHA256 over `timestamp.body`, timestamp replay window,
   per-source encrypted secrets, rate limits, and dedupe; ingest as signals.
+- **Sync cursors**: Google `syncToken` and Microsoft `deltaLink` are persisted
+  per connector; `410`/resync-required clears the cursor and does a full sync.
+  `dt connector reset` clears it manually.
 - **MCP resources**: sensitive (`secret`/`health`) facts are excluded and cannot
   be read by URI.
 - **MCP server**: read-only by default; write tools are hidden unless
@@ -410,7 +416,8 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 
 ## Roadmap
 
-1. Provider-specific webhook verification and incremental sync cursors.
+1. Feishu sync tokens, provider-specific webhook verification, and webhook
+   subscriptions.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.

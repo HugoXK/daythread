@@ -143,6 +143,40 @@ class RateLimitThenOkOpener:
         ).encode("utf-8")
 
 
+class SyncTokenOpener:
+    def __init__(self):
+        self.urls = []
+
+    def __call__(self, request):
+        self.urls.append(request.full_url)
+        if "syncToken=" in request.full_url:
+            item = {"id": "evt-2", "summary": "Second", "start": {"dateTime": "x"}}
+            return json.dumps({"items": [item], "nextSyncToken": "tok2"}).encode("utf-8")
+        item = {"id": "evt-1", "summary": "First", "start": {"dateTime": "x"}}
+        return json.dumps({"items": [item], "nextSyncToken": "tok1"}).encode("utf-8")
+
+
+class MicrosoftDeltaOpener:
+    def __init__(self):
+        self.urls = []
+
+    def __call__(self, request):
+        self.urls.append(request.full_url)
+        if request.full_url.endswith("delta1"):
+            return json.dumps(
+                {
+                    "value": [{"id": "ms-2", "subject": "Second", "start": {"dateTime": "x"}}],
+                    "@odata.deltaLink": "https://graph.example/delta2",
+                }
+            ).encode("utf-8")
+        return json.dumps(
+            {
+                "value": [{"id": "ms-1", "subject": "First", "start": {"dateTime": "x"}}],
+                "@odata.deltaLink": "https://graph.example/delta1",
+            }
+        ).encode("utf-8")
+
+
 class GoogleConnectorTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -206,6 +240,45 @@ class GoogleConnectorTest(unittest.TestCase):
         self.assertEqual(result["id"], "draft-1")
         body = json.loads(opener.requests[0].data.decode("utf-8"))
         self.assertIn("raw", body["message"])
+
+    def test_google_calendar_sync_token(self):
+        state = {}
+        opener = SyncTokenOpener()
+        first = connectors._sync_google_calendar(
+            NOW, {"access_token": "x"}, opener=opener, state=state
+        )
+        self.assertEqual(len(first), 1)
+        self.assertEqual(state["sync_token"], "tok1")
+        second = connectors._sync_google_calendar(
+            NOW, {"access_token": "x"}, opener=opener, state=state
+        )
+        self.assertEqual(len(second), 1)
+        self.assertEqual(state["sync_token"], "tok2")
+        self.assertIn("syncToken=tok1", opener.urls[1])
+
+    def test_microsoft_delta_state(self):
+        state = {}
+        opener = MicrosoftDeltaOpener()
+        first = connectors._sync_microsoft_calendar(
+            NOW, {"access_token": "x"}, opener=opener, state=state
+        )
+        self.assertEqual(len(first), 1)
+        self.assertEqual(state["calendar_delta"], "https://graph.example/delta1")
+        second = connectors._sync_microsoft_calendar(
+            NOW, {"access_token": "x"}, opener=opener, state=state
+        )
+        self.assertEqual(len(second), 1)
+        self.assertEqual(state["calendar_delta"], "https://graph.example/delta2")
+        self.assertEqual(opener.urls[1], "https://graph.example/delta1")
+
+    def test_state_helpers(self):
+        connectors.save_state(self.conn, "google.calendar", {"sync_token": "a"})
+        self.assertEqual(connectors.get_state(self.conn, "google.calendar"), {"sync_token": "a"})
+        connectors.save_state(self.conn, "google.calendar", {})
+        self.assertEqual(connectors.get_state(self.conn, "google.calendar"), {})
+        connectors.save_state(self.conn, "google.calendar", {"x": "1"})
+        connectors.clear_state(self.conn, "google.calendar")
+        self.assertEqual(connectors.get_state(self.conn, "google.calendar"), {})
 
     def test_google_calendar_pagination(self):
         opener = PaginatedCalendarOpener()
@@ -301,6 +374,36 @@ class GoogleConnectorTest(unittest.TestCase):
         self.assertEqual(run["state"], "completed")
         note = self.home / "notes" / "mock-action.md"
         self.assertEqual(note.read_text(encoding="utf-8"), "runtime-action")
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_sync_persists_sync_token(self):
+        self.conn.execute(
+            "INSERT INTO connectors(id, version, status, scopes, connected_at) VALUES('google.calendar', '1.1.0', 'connected', '[]', '2026-01-01')"
+        )
+        self.conn.commit()
+        oauth.TokenStore(self.conn, self.home).save(
+            "google.calendar",
+            {
+                "access_token": "x",
+                "refresh_token": "r",
+                "expires_at": "2099-01-01T00:00:00+00:00",
+                "scope": "https://www.googleapis.com/auth/calendar",
+            },
+        )
+        opener = SyncTokenOpener()
+        connectors.sync(
+            self.conn, "google.calendar", now=NOW, home=self.home, opener=opener
+        )
+        self.assertEqual(
+            connectors.get_state(self.conn, "google.calendar")["sync_token"], "tok1"
+        )
+        connectors.sync(
+            self.conn, "google.calendar", now=NOW, home=self.home, opener=opener
+        )
+        self.assertEqual(
+            connectors.get_state(self.conn, "google.calendar")["sync_token"], "tok2"
+        )
+        self.assertIn("syncToken=tok1", opener.urls[1])
 
     @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_scope_mismatch_requires_reauthorization(self):

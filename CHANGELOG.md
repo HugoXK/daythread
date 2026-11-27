@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0 — incremental sync cursors
+
+- Schema v7: persistent `connector_state` per connector.
+- Google Calendar uses `syncToken` with `410` full-resync fallback.
+- Microsoft Graph Calendar/Mail use `deltaLink` cursors, skip `@removed`
+  entries, and fall back to a full delta on resync-required.
+- Connector sync persists cursor changes; `dt connector state|reset` and
+  `dt connector sync --reset`.
+- 213 unit tests.
+
 ## 0.13.0 — signed webhooks and MCP resources
 
 - Schema v6: `webhook_events` with dedupe and timestamp indexes.

@@ -52,6 +52,7 @@ def _sync_gcal(
     now: datetime,
     token: Optional[Dict[str, Any]] = None,
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    state: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     today = now.date()
     tomorrow = today + timedelta(days=1)
@@ -81,6 +82,7 @@ def _sync_gmail(
     now: datetime,
     token: Optional[Dict[str, Any]] = None,
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    state: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     return [
         {
@@ -112,25 +114,52 @@ def _sync_google_calendar(
     now: datetime,
     token: Optional[Dict[str, Any]],
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    state: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     time_min = quote((now - timedelta(days=1)).isoformat())
-    base = (
-        "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-        "?singleEvents=true&orderBy=startTime&maxResults=25&timeMin={}".format(time_min)
-    )
+    state = state if state is not None else {}
+    sync_token = state.get("sync_token")
+
+    def base_url(token_value):
+        if token_value:
+            return (
+                "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+                "?singleEvents=true&showDeleted=true&maxResults=25&syncToken={}".format(
+                    quote(token_value)
+                )
+            )
+        return (
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+            "?singleEvents=true&orderBy=startTime&maxResults=25&timeMin={}".format(
+                time_min
+            )
+        )
+
     items = []
     page_token = None
-    for _ in range(MAX_PAGES):
-        url = base
-        if page_token:
-            url += "&pageToken={}".format(quote(page_token))
-        data = _http_json(url, token, opener)
-        items.extend(data.get("items", []))
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
+    try:
+        for _ in range(MAX_PAGES):
+            url = base_url(sync_token)
+            if page_token:
+                url += "&pageToken={}".format(quote(page_token))
+            data = _http_json(url, token, opener)
+            items.extend(data.get("items", []))
+            next_sync = data.get("nextSyncToken")
+            if next_sync:
+                state["sync_token"] = str(next_sync)
+                sync_token = str(next_sync)
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+    except ProviderError as exc:
+        if sync_token and "410" in str(exc):
+            state.pop("sync_token", None)
+            return _sync_google_calendar(now, token, opener, state)
+        raise
     result = []
     for event in items:
+        if event.get("status") == "cancelled":
+            continue
         start = (event.get("start") or {}).get("dateTime") or (event.get("start") or {}).get("date")
         end = (event.get("end") or {}).get("dateTime") or (event.get("end") or {}).get("date")
         result.append(
@@ -151,6 +180,7 @@ def _sync_google_gmail(
     now: datetime,
     token: Optional[Dict[str, Any]],
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    state: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     base = "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=is%3Aunread"
     messages = []
@@ -262,38 +292,56 @@ def _sync_microsoft_calendar(
     now: datetime,
     token: Optional[Dict[str, Any]],
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    state: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
+    state = state if state is not None else {}
     start = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     end = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    url = (
-        "https://graph.microsoft.com/v1.0/me/calendarView"
+    initial = (
+        "https://graph.microsoft.com/v1.0/me/calendarView/delta"
         "?startDateTime={}&endDateTime={}&$top=25&$select=id,subject,start,end".format(
             quote(start), quote(end)
         )
     )
     items = []
-    next_url = url
-    for _ in range(MAX_PAGES):
-        data = _http_json(
-            next_url, token, opener, extra_headers={"Prefer": 'outlook.timezone="UTC"'}
-        )
-        for event in data.get("value", []):
-            start_dt = (event.get("start") or {}).get("dateTime")
-            end_dt = (event.get("end") or {}).get("dateTime")
-            items.append(
-                {
-                    "kind": "calendar",
-                    "external_id": str(event.get("id", "")),
-                    "payload": {
-                        "title": event.get("subject") or "(untitled)",
-                        "start": start_dt,
-                        "end": end_dt,
-                    },
-                }
+    next_url = state.get("calendar_delta") or initial
+    try:
+        for _ in range(MAX_PAGES):
+            data = _http_json(
+                next_url,
+                token,
+                opener,
+                extra_headers={"Prefer": 'outlook.timezone="UTC"'},
             )
-        next_url = data.get("@odata.nextLink")
-        if not next_url:
-            break
+            for event in data.get("value", []):
+                if event.get("@removed"):
+                    continue
+                start_dt = (event.get("start") or {}).get("dateTime")
+                end_dt = (event.get("end") or {}).get("dateTime")
+                items.append(
+                    {
+                        "kind": "calendar",
+                        "external_id": str(event.get("id", "")),
+                        "payload": {
+                            "title": event.get("subject") or "(untitled)",
+                            "start": start_dt,
+                            "end": end_dt,
+                        },
+                    }
+                )
+            delta = data.get("@odata.deltaLink")
+            if delta:
+                state["calendar_delta"] = str(delta)
+            next_url = data.get("@odata.nextLink")
+            if not next_url:
+                break
+    except ProviderError as exc:
+        if state.get("calendar_delta") and (
+            "410" in str(exc) or "resync" in str(exc).lower()
+        ):
+            state.pop("calendar_delta", None)
+            return _sync_microsoft_calendar(now, token, opener, state)
+        raise
     return items
 
 
@@ -301,36 +349,50 @@ def _sync_microsoft_mail(
     now: datetime,
     token: Optional[Dict[str, Any]],
     opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+    state: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    url = (
-        "https://graph.microsoft.com/v1.0/me/messages"
-        "?$filter=isRead%20eq%20false&$top=10"
+    state = state if state is not None else {}
+    initial = (
+        "https://graph.microsoft.com/v1.0/me/messages/delta?$top=10"
         "&$select=id,from,subject,bodyPreview,receivedDateTime"
     )
     items = []
-    next_url = url
-    for _ in range(MAX_PAGES):
-        data = _http_json(next_url, token, opener)
-        for message in data.get("value", []):
-            sender = (
-                ((message.get("from") or {}).get("emailAddress") or {}).get("address", "")
-            )
-            items.append(
-                {
-                    "kind": "message",
-                    "external_id": str(message.get("id", "")),
-                    "payload": {
-                        "sender": sender,
-                        "subject": message.get("subject", ""),
-                        "snippet": message.get("bodyPreview", ""),
-                        "body": message.get("bodyPreview", ""),
-                        "ts": message.get("receivedDateTime") or now.isoformat(),
-                    },
-                }
-            )
-        next_url = data.get("@odata.nextLink")
-        if not next_url:
-            break
+    next_url = state.get("mail_delta") or initial
+    try:
+        for _ in range(MAX_PAGES):
+            data = _http_json(next_url, token, opener)
+            for message in data.get("value", []):
+                if message.get("@removed"):
+                    continue
+                sender = (
+                    ((message.get("from") or {}).get("emailAddress") or {}).get("address", "")
+                )
+                items.append(
+                    {
+                        "kind": "message",
+                        "external_id": str(message.get("id", "")),
+                        "payload": {
+                            "sender": sender,
+                            "subject": message.get("subject", ""),
+                            "snippet": message.get("bodyPreview", ""),
+                            "body": message.get("bodyPreview", ""),
+                            "ts": message.get("receivedDateTime") or now.isoformat(),
+                        },
+                    }
+                )
+            delta = data.get("@odata.deltaLink")
+            if delta:
+                state["mail_delta"] = str(delta)
+            next_url = data.get("@odata.nextLink")
+            if not next_url:
+                break
+    except ProviderError as exc:
+        if state.get("mail_delta") and (
+            "410" in str(exc) or "resync" in str(exc).lower()
+        ):
+            state.pop("mail_delta", None)
+            return _sync_microsoft_mail(now, token, opener, state)
+        raise
     return items
 
 
@@ -372,7 +434,7 @@ def _unix_from_value(value) -> str:
 
 
 def _feishu_calendar_sync(base: str):
-    def sync(now, token, opener=None):
+    def sync(now, token, opener=None, state=None):
         primary = _http_json(
             "{}/open-apis/calendar/v4/calendars/primary".format(base), token, opener
         )
@@ -412,7 +474,7 @@ def _feishu_calendar_sync(base: str):
 
 
 def _feishu_task_sync(base: str):
-    def sync(now, token, opener=None):
+    def sync(now, token, opener=None, state=None):
         payload = _http_json(
             "{}/open-apis/task/v2/tasks?page_size=50".format(base), token, opener
         )
@@ -819,6 +881,38 @@ def get_connector(connector_id: str) -> ConnectorSpec:
         )
 
 
+def get_state(conn: sqlite3.Connection, connector_id: str) -> Dict[str, str]:
+    rows = conn.execute(
+        "SELECT key, value FROM connector_state WHERE connector = ?", (connector_id,)
+    ).fetchall()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def save_state(conn: sqlite3.Connection, connector_id: str, state: Dict[str, str]) -> None:
+    existing = set(get_state(conn, connector_id))
+    for key in existing - set(state):
+        conn.execute(
+            "DELETE FROM connector_state WHERE connector = ? AND key = ?",
+            (connector_id, key),
+        )
+    now = utc_now()
+    for key, value in state.items():
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO connector_state(connector, key, value, updated_at)
+            VALUES(?, ?, ?, ?)
+            """,
+            (connector_id, key, str(value), now),
+        )
+    conn.commit()
+
+
+def clear_state(conn: sqlite3.Connection, connector_id: str) -> None:
+    conn.execute("DELETE FROM connector_state WHERE connector = ?", (connector_id,))
+    conn.commit()
+    obs.audit(conn, "connector.state.cleared", actor="user", target=connector_id)
+
+
 def manifest(connector_id: str) -> Dict[str, Any]:
     spec = get_connector(connector_id)
     return {
@@ -1026,7 +1120,9 @@ def sync(
     token = _get_token(conn, spec, home, opener, connector_id)
 
     limit = int(get_setting(conn, "connector.max_items", "100") or 100)
-    items = spec.sync(moment, token, opener)[:limit]
+    state = get_state(conn, connector_id)
+    items = spec.sync(moment, token, opener, state)[:limit]
+    save_state(conn, connector_id, state)
     inserted = 0
     for item in items:
         kind = item["kind"]

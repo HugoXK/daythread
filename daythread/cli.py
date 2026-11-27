@@ -224,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
     connector_revoke.add_argument("id")
     connector_sync = connector_sub.add_parser("sync", help="sync a connected connector")
     connector_sync.add_argument("id")
+    connector_sync.add_argument("--reset", action="store_true", help="clear cursor before sync")
+    connector_state = connector_sub.add_parser("state", help="show connector sync cursor")
+    connector_state.add_argument("id")
+    connector_reset = connector_sub.add_parser("reset", help="clear a connector sync cursor")
+    connector_reset.add_argument("id")
     connector_call = connector_sub.add_parser("call", help="propose a connector action")
     connector_call.add_argument("id")
     connector_call.add_argument("action")
@@ -985,10 +990,20 @@ def _connector(args: argparse.Namespace, conn, home: Path) -> None:
         result = connectors.disconnect(conn, args.id, home=home)
         _print_json(result) if args.as_json else print("disconnected {}".format(result["id"]))
     elif args.connector_cmd == "sync":
+        if args.reset:
+            connectors.clear_state(conn, args.id)
         result = connectors.sync(conn, args.id, home=home)
         _print_json(result) if args.as_json else print(
             "synced {}: {} item(s), {} new".format(result["id"], result["items"], result["inserted"])
         )
+    elif args.connector_cmd == "state":
+        state = connectors.get_state(conn, args.id)
+        _print_json(state) if args.as_json else print(
+            json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2)
+        )
+    elif args.connector_cmd == "reset":
+        connectors.clear_state(conn, args.id)
+        print("cleared state for {}".format(args.id))
     elif args.connector_cmd == "call":
         status = next(
             (item for item in connectors.list_connectors(conn) if item["id"] == args.id),
