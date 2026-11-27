@@ -49,6 +49,12 @@ class ReleaseTest(unittest.TestCase):
             (dist / "daythread-1.2.3.whl").write_bytes(b"wheel")
             summary = write_release(dist, "1.2.3", key="release-key")
             self.assertEqual(summary["signed"], "true")
+            import json
+
+            manifest = json.loads(
+                (dist / "release-manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(manifest["sbom_sha256"])
             self.assertTrue((dist / "sbom.json").exists())
             self.assertTrue((dist / "release-manifest.json").exists())
             self.assertTrue((dist / "SHA256SUMS").exists())

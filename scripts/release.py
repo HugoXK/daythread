@@ -84,6 +84,7 @@ def build_manifest(
     version: Optional[str] = None,
     commit: Optional[str] = None,
     key: Optional[str] = None,
+    sbom_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     version = version or __version__
     files = []
@@ -108,6 +109,7 @@ def build_manifest(
         "commit": commit,
         "created_at": utc_now(),
         "files": files,
+        "sbom_sha256": sbom_sha256,
     }
     if key:
         canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -203,10 +205,17 @@ def write_release(
         and path.name not in ("release-manifest.json", "SHA256SUMS", "sbom.json")
     ]
     sbom = build_sbom(version, files)
-    (dist_dir / "sbom.json").write_text(
-        json.dumps(sbom, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    sbom_bytes = json.dumps(
+        sbom, ensure_ascii=False, indent=2, sort_keys=True
+    ).encode("utf-8")
+    (dist_dir / "sbom.json").write_bytes(sbom_bytes)
+    manifest = build_manifest(
+        dist_dir,
+        version,
+        commit,
+        key=None if signing_key else key,
+        sbom_sha256=hashlib.sha256(sbom_bytes).hexdigest(),
     )
-    manifest = build_manifest(dist_dir, version, commit, key=None if signing_key else key)
     if signing_key:
         manifest = sign_manifest_ed25519(manifest, signing_key)
     (dist_dir / "release-manifest.json").write_text(

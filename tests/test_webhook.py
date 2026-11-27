@@ -7,7 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from daythread import crypto, webhook
-from daythread.db import connect, init_db
+from daythread.db import connect, init_db, set_setting
 from daythread.server import ApiServer
 
 
@@ -45,6 +45,41 @@ class WebhookTest(unittest.TestCase):
             )
         )
 
+    def test_provider_modes(self):
+        body = b'{"clientState":"shared-secret"}'
+        self.assertTrue(
+            webhook.verify_request(
+                "shared-secret", body, {}, mode="microsoft"
+            )
+        )
+        self.assertFalse(
+            webhook.verify_request(
+                "shared-secret", b'{"clientState":"wrong"}', {}, mode="microsoft"
+            )
+        )
+        self.assertTrue(
+            webhook.verify_request(
+                "token", b"{}", {"X-Goog-Channel-Token": "token"}, mode="google"
+            )
+        )
+        timestamp = str(int(time.time()))
+        nonce = "abc"
+        signature = __import__("hashlib").sha256(
+            (timestamp + nonce + "shared-secret").encode("utf-8") + b"{}"
+        ).hexdigest()
+        self.assertTrue(
+            webhook.verify_request(
+                "shared-secret",
+                b"{}",
+                {
+                    "X-Lark-Request-Timestamp": timestamp,
+                    "X-Lark-Request-Nonce": nonce,
+                    "X-Lark-Signature": signature,
+                },
+                mode="feishu",
+            )
+        )
+
     def test_ingest_dedupe(self):
         first = webhook.ingest(self.conn, "demo", {"id": "evt-1"}, dedupe_key="evt-1")
         second = webhook.ingest(self.conn, "demo", {"id": "evt-1"}, dedupe_key="evt-1")
@@ -64,6 +99,34 @@ class WebhookTest(unittest.TestCase):
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as exc:
             return exc.code, {}
+
+    def test_server_microsoft_mode(self):
+        set_setting(self.conn, "webhook.demo.mode", "microsoft")
+        self.server = ApiServer(self.home, self.db_path, port=0).start()
+        try:
+            body = json.dumps(
+                {
+                    "clientState": "shared-secret",
+                    "value": [{"id": "ms1", "title": "Deploy finished"}],
+                }
+            ).encode("utf-8")
+            status, payload = self._post(
+                "/v1/webhooks/demo",
+                body,
+                {"Content-Type": "application/json"},
+            )
+            self.assertEqual(status, 202)
+            self.assertTrue(payload["signal_id"])
+            self.assertEqual(
+                self._post(
+                    "/v1/webhooks/demo",
+                    b'{"clientState":"wrong"}',
+                    {"Content-Type": "application/json"},
+                )[0],
+                401,
+            )
+        finally:
+            self.server.stop()
 
     def test_server_webhook(self):
         self.server = ApiServer(self.home, self.db_path, port=0).start()

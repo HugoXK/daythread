@@ -414,12 +414,17 @@ def _make_handler(home: Path, db_path: Path, token: str):
                 self._json(400, {"error": str(exc), "request_id": request_id}, request_id)
                 return
             max_age = int(get_setting(conn, "webhook.max_age_seconds", "300") or 300)
-            if not webhook.verify(
-                secret,
-                raw,
-                self.headers.get(webhook.TIMESTAMP_HEADER),
-                self.headers.get(webhook.SIGNATURE_HEADER),
-                max_age=max_age,
+            mode = str(
+                get_setting(conn, "webhook.{}.mode".format(source), "generic")
+                or "generic"
+            )
+            query = parse_qs(urlparse(self.path).query)
+            validation = query.get("validationToken", [None])[0]
+            if mode == "microsoft" and validation:
+                self._text(200, validation, request_id)
+                return
+            if not webhook.verify_request(
+                secret, raw, self.headers, mode=mode, max_age=max_age
             ):
                 self._json(401, {"error": "invalid_signature", "request_id": request_id}, request_id)
                 return
@@ -445,6 +450,10 @@ def _make_handler(home: Path, db_path: Path, token: str):
                 or payload.get("event_id")
                 or payload.get("dedupe_key")
             )
+            if not dedupe and mode == "microsoft":
+                values = payload.get("value") or []
+                if values and isinstance(values[0], dict):
+                    dedupe = values[0].get("id")
             result = webhook.ingest(
                 conn,
                 source,

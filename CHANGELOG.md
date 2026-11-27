@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.0 — provider webhooks and signed SBOM
+
+- Webhook modes: generic HMAC, Microsoft clientState + validationToken
+  handshake, Google channel token, Feishu `X-Lark-Signature`.
+- Microsoft change notifications with a `value` array ingest one signal per
+  item with per-item dedupe.
+- Release manifests include the SBOM SHA256, covered by the Ed25519/HMAC
+  signature.
+- 233 unit tests.
+
 ## 0.19.0 — Linux sandbox and compliance guide
 
 - Linux bubblewrap (`bwrap`) sandbox backend with network namespace isolation.

@@ -43,6 +43,59 @@ def sign(secret: str, body: bytes, timestamp: Optional[int] = None) -> Dict[str,
     return {"timestamp": moment, "signature": "sha256=" + signature}
 
 
+def verify_request(
+    secret: str,
+    body: bytes,
+    headers,
+    mode: str = "generic",
+    max_age: int = DEFAULT_MAX_AGE,
+) -> bool:
+    if mode == "generic":
+        return verify(
+            secret,
+            body,
+            _header(headers, TIMESTAMP_HEADER),
+            _header(headers, SIGNATURE_HEADER),
+            max_age=max_age,
+        )
+    if mode == "microsoft":
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return False
+        return hmac.compare_digest(str(payload.get("clientState", "")), secret)
+    if mode == "google":
+        return hmac.compare_digest(
+            str(_header(headers, "X-Goog-Channel-Token") or ""), secret
+        )
+    if mode == "feishu":
+        timestamp = _header(headers, "X-Lark-Request-Timestamp")
+        nonce = _header(headers, "X-Lark-Request-Nonce")
+        signature = _header(headers, "X-Lark-Signature")
+        if not timestamp or not nonce or not signature:
+            return False
+        try:
+            moment = int(timestamp)
+        except (TypeError, ValueError):
+            return False
+        if abs(int(time.time()) - moment) > max_age:
+            return False
+        message = (str(timestamp) + str(nonce) + secret).encode("utf-8") + body
+        expected = hashlib.sha256(message).hexdigest()
+        return hmac.compare_digest(signature, expected)
+    return False
+
+
+def _header(headers, name: str) -> Optional[str]:
+    try:
+        value = headers.get(name)
+        if value is not None:
+            return value
+        return headers.get(name.lower())
+    except AttributeError:
+        return None
+
+
 def verify(
     secret: str,
     body: bytes,
@@ -89,22 +142,43 @@ def ingest(
             "event_id": row["id"] if row else None,
             "signal_id": None,
         }
-    signal = proactivity.ingest_signal(
-        conn,
-        source="webhook:{}".format(source),
-        kind="event",
-        payload=payload,
-        dedupe_key=dedupe_key,
-    )
+    signal_ids = []
+    values = payload.get("value") if isinstance(payload.get("value"), list) else None
+    if values:
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                continue
+            signal = proactivity.ingest_signal(
+                conn,
+                source="webhook:{}".format(source),
+                kind="event",
+                payload=item,
+                dedupe_key=str(item.get("id") or "{}-{}".format(dedupe_key, index)),
+            )
+            signal_ids.append(signal["id"])
+    else:
+        signal = proactivity.ingest_signal(
+            conn,
+            source="webhook:{}".format(source),
+            kind="event",
+            payload=payload,
+            dedupe_key=dedupe_key,
+        )
+        signal_ids.append(signal["id"])
     obs.incr(conn, "webhooks.ingested")
     obs.audit(
         conn,
         "webhook.ingested",
         actor="webhook",
         target=source,
-        detail={"event_id": event_id, "signal_id": signal["id"]},
+        detail={"event_id": event_id, "signal_ids": signal_ids},
     )
-    return {"duplicate": False, "event_id": event_id, "signal_id": signal["id"]}
+    return {
+        "duplicate": False,
+        "event_id": event_id,
+        "signal_id": signal_ids[0] if signal_ids else None,
+        "signal_ids": signal_ids,
+    }
 
 
 def list_events(conn, limit: int = 50) -> List[Dict[str, Any]]:
