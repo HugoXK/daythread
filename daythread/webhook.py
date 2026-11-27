@@ -154,6 +154,7 @@ def ingest(
                 kind="event",
                 payload=item,
                 dedupe_key=str(item.get("id") or "{}-{}".format(dedupe_key, index)),
+                taint="untrusted",
             )
             signal_ids.append(signal["id"])
     else:
@@ -163,6 +164,7 @@ def ingest(
             kind="event",
             payload=payload,
             dedupe_key=dedupe_key,
+            taint="untrusted",
         )
         signal_ids.append(signal["id"])
     obs.incr(conn, "webhooks.ingested")

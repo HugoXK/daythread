@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from daythread import crypto, webhook
+from daythread import crypto, proactivity, webhook
 from daythread.db import connect, init_db, set_setting
 from daythread.server import ApiServer
 
@@ -160,6 +160,60 @@ class WebhookTest(unittest.TestCase):
             self.assertEqual(self._post("/v1/webhooks/demo", body, stale)[0], 401)
         finally:
             self.server.stop()
+
+
+class WebhookTaintTest(unittest.TestCase):
+    """Webhook content is external input: it must land untrusted.
+
+    This class deliberately does not require the cryptography extra, because
+    the taint contract must be covered on every CI matrix entry.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.db_path = self.home / "db.sqlite"
+        self.conn = connect(self.db_path)
+        init_db(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _taint(self, signal_id):
+        row = self.conn.execute(
+            "SELECT taint FROM signals WHERE id = ?", (signal_id,)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        return row["taint"]
+
+    def test_ingest_marks_signals_untrusted(self):
+        single = webhook.ingest(
+            self.conn,
+            "demo",
+            {"id": "evt-1", "title": "Deploy finished"},
+            dedupe_key="evt-1",
+        )
+        self.assertFalse(single["duplicate"])
+        self.assertEqual(self._taint(single["signal_id"]), "untrusted")
+
+        batch = webhook.ingest(
+            self.conn,
+            "demo",
+            {"value": [{"id": "ms-1"}, {"id": "ms-2"}]},
+            dedupe_key="evt-2",
+        )
+        self.assertEqual(len(batch["signal_ids"]), 2)
+        for signal_id in batch["signal_ids"]:
+            self.assertEqual(self._taint(signal_id), "untrusted")
+
+    def test_internal_signal_default_stays_trusted(self):
+        # Scope guard: only the webhook entry changes; internal signals keep
+        # the trusted default until taint propagation is designed separately.
+        signal = proactivity.ingest_signal(
+            self.conn, "internal", "note", {"title": "local"}
+        )
+        self.assertEqual(signal["taint"], "trusted")
 
 
 if __name__ == "__main__":
