@@ -62,7 +62,7 @@ class MigrationMatrixTest(unittest.TestCase):
             ).fetchone()
         )
 
-    def test_v4_to_v5_purges_plaintext_cache(self):
+    def test_v4_to_latest_purges_plaintext_cache(self):
         self._v1()
         migrations._migrate_v2(self.conn)
         migrations._migrate_v3(self.conn)
@@ -72,7 +72,7 @@ class MigrationMatrixTest(unittest.TestCase):
             "INSERT INTO model_cache(key, provider, model, response, created_at, expires_at) VALUES('k','p','m','plaintext','2026-01-01','2099-01-01')"
         )
         self.conn.commit()
-        self.assertEqual(migrations.migrate(self.conn), 5)
+        self.assertEqual(migrations.migrate(self.conn), migrations.LATEST_VERSION)
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM model_cache").fetchone()[0], 0
         )

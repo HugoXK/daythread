@@ -27,6 +27,7 @@ from . import (
     proactivity,
     runtime,
     scheduler,
+    webhook,
 )
 from . import migrations
 from .db import connect, get_setting, init_db, is_initialized
@@ -120,6 +121,9 @@ def _make_handler(home: Path, db_path: Path, token: str):
                     return
                 if path == "/v1/health":
                     self._json(200, {"ok": True, "version": __version__}, request_id)
+                    return
+                if method == "POST" and path.startswith("/v1/webhooks/"):
+                    self._handle_webhook(path, conn, request_id)
                     return
                 if not self._authorized():
                     self._json(401, {"error": "unauthorized", "request_id": request_id}, request_id)
@@ -356,6 +360,68 @@ def _make_handler(home: Path, db_path: Path, token: str):
             self.end_headers()
             self.wfile.write(encoded)
 
+        def _handle_webhook(self, path: str, conn, request_id: str) -> None:
+            parts = path.split("/")
+            if len(parts) != 4 or not re.match(r"^[A-Za-z0-9_.-]{1,64}$", parts[3]):
+                self._json(400, {"error": "invalid_webhook_source", "request_id": request_id}, request_id)
+                return
+            source = parts[3]
+            try:
+                secret = webhook.get_secret(conn, home, source)
+            except KeyError:
+                self._json(401, {"error": "unauthorized", "request_id": request_id}, request_id)
+                return
+            try:
+                raw = self._read_raw()
+            except ValueError as exc:
+                self._json(400, {"error": str(exc), "request_id": request_id}, request_id)
+                return
+            max_age = int(get_setting(conn, "webhook.max_age_seconds", "300") or 300)
+            if not webhook.verify(
+                secret,
+                raw,
+                self.headers.get(webhook.TIMESTAMP_HEADER),
+                self.headers.get(webhook.SIGNATURE_HEADER),
+                max_age=max_age,
+            ):
+                self._json(401, {"error": "invalid_signature", "request_id": request_id}, request_id)
+                return
+            limit = int(get_setting(conn, "webhook.rate_limit_per_minute", "120") or 120)
+            if not _rate_limit(conn, "webhook:{}".format(source), limit):
+                self._json(
+                    429,
+                    {"error": "rate_limited", "request_id": request_id},
+                    request_id,
+                    extra_headers={"Retry-After": "60"},
+                )
+                return
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                self._json(400, {"error": "invalid_json", "request_id": request_id}, request_id)
+                return
+            if not isinstance(payload, dict):
+                self._json(400, {"error": "payload_must_be_object", "request_id": request_id}, request_id)
+                return
+            dedupe = (
+                payload.get("id")
+                or payload.get("event_id")
+                or payload.get("dedupe_key")
+            )
+            result = webhook.ingest(
+                conn,
+                source,
+                payload,
+                dedupe_key=str(dedupe) if dedupe else None,
+            )
+            self._json(202, result, request_id)
+
+        def _read_raw(self) -> bytes:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length > MAX_BODY:
+                raise ValueError("request body too large")
+            return self.rfile.read(length) if length else b""
+
         def _authorized(self) -> bool:
             header = self.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
@@ -366,7 +432,7 @@ def _make_handler(home: Path, db_path: Path, token: str):
             length = int(self.headers.get("Content-Length", "0") or 0)
             if length > MAX_BODY:
                 raise ValueError("request body too large")
-            raw = self.rfile.read(length) if length else b"{}"
+            raw = self._read_raw() if length else b"{}"
             try:
                 data = json.loads(raw.decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
@@ -491,6 +557,9 @@ def _openapi() -> Dict[str, Any]:
             "/v1/ask": {"post": {"summary": "Ask the configured model"}},
             "/v1/metrics": {"get": {"summary": "Metrics snapshot"}},
             "/metrics": {"get": {"summary": "Prometheus metrics"}},
+            "/v1/webhooks/{source}": {
+                "post": {"summary": "Signed webhook ingestion", "security": []}
+            },
         },
     }
 

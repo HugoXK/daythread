@@ -78,6 +78,9 @@ The baseline is designed to preserve these invariants:
   purge is explicit.
 - Model egress: `model.egress=local_only` blocks remote providers; retries are
   bounded; streaming does not bypass the daily token budget.
+- Webhooks: HMAC-SHA256 over `timestamp.body`, timestamp replay window,
+  per-source secrets in the encrypted vault, rate limits, and dedupe.
+- MCP resources never expose `secret`/`health` facts.
 - Relay device tokens can expire; `ETag`/`If-Match` prevents silent overwrites
   when clients opt in.
 - No credentials or telemetry are collected.

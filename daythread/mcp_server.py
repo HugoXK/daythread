@@ -163,9 +163,15 @@ def _handle(
         tools = [schema for schema in _schemas() if not (read_only and schema["name"] in WRITE_TOOLS)]
         return {"tools": tools}
     if method == "resources/list":
-        return {"resources": []}
+        return {"resources": _resources(conn)}
+    if method == "resources/read":
+        return _read_resource(conn, str(params.get("uri", "")))
     if method == "prompts/list":
-        return {"prompts": []}
+        return {"prompts": _prompts()}
+    if method == "prompts/get":
+        return _get_prompt(
+            str(params.get("name", "")), params.get("arguments") or {}
+        )
     if method == "tools/call":
         name = str(params.get("name", ""))
         arguments = params.get("arguments") or {}
@@ -179,6 +185,93 @@ def _handle(
             "isError": False,
         }
     raise ValidationError("unknown method: {}".format(method))
+
+
+def _resources(conn) -> List[Dict[str, Any]]:
+    resources = [
+        {
+            "uri": "daythread://today",
+            "name": "Today",
+            "description": "The current morning brief.",
+            "mimeType": "application/json",
+        }
+    ]
+    for fact in memory.list_facts(conn, limit=100):
+        resources.append(
+            {
+                "uri": "daythread://memory/{}".format(fact["id"]),
+                "name": "{} · {}".format(fact["subject_id"], fact["predicate"]),
+                "description": fact["subject_type"],
+                "mimeType": "application/json",
+            }
+        )
+    return resources
+
+
+def _read_resource(conn, uri: str) -> Dict[str, Any]:
+    if uri == "daythread://today":
+        data = brief.morning_brief(conn)
+    elif uri.startswith("daythread://memory/"):
+        fact = memory.get_fact(conn, uri.rsplit("/", 1)[-1])
+        if fact.get("sensitivity") in ("secret", "health"):
+            raise ValidationError("resource is sensitive and not exposed over MCP")
+        data = fact
+    else:
+        raise ValidationError("unknown resource: {}".format(uri))
+    return {
+        "contents": [
+            {
+                "uri": uri,
+                "mimeType": "application/json",
+                "text": json.dumps(data, ensure_ascii=False),
+            }
+        ]
+    }
+
+
+def _prompts() -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": "daythread.morning",
+            "description": "Summarize the day and propose at most three actions.",
+        },
+        {
+            "name": "daythread.plan",
+            "description": "Propose a Daythread plan for an intent.",
+            "arguments": [
+                {
+                    "name": "intent",
+                    "description": "What the user wants to accomplish.",
+                    "required": True,
+                }
+            ],
+        },
+    ]
+
+
+def _get_prompt(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    if name == "daythread.morning":
+        text = (
+            "Read the Daythread brief. Summarize what changed, then propose at most "
+            "three concrete actions. Use daythread.propose_plan for anything that "
+            "writes or sends."
+        )
+    elif name == "daythread.plan":
+        intent = str(arguments.get("intent", "")).strip()
+        if not intent:
+            raise ValidationError("intent is required")
+        text = (
+            "Propose a Daythread plan for: {}. Prefer read tools first, then a "
+            "single approval-gated write/send step. Explain the risk."
+        ).format(intent)
+    else:
+        raise ValidationError("unknown prompt: {}".format(name))
+    return {
+        "description": name,
+        "messages": [
+            {"role": "user", "content": {"type": "text", "text": text}}
+        ],
+    }
 
 
 def _call(conn, home: Path, name: str, arguments: Dict[str, Any]) -> Any:

@@ -38,6 +38,7 @@ from . import (
     scheduler,
     skills,
     sync,
+    webhook,
 )
 from .crypto import SecretVault
 from .db import connect, init_db, is_initialized, set_setting
@@ -373,6 +374,21 @@ def build_parser() -> argparse.ArgumentParser:
     sync_pull.add_argument("--replace", action="store_true")
     sync_push.add_argument("--if-match", default=None)
 
+    webhook_p = sub.add_parser("webhook", help="signed webhook ingestion")
+    webhook_sub = webhook_p.add_subparsers(dest="webhook_cmd", required=True)
+    webhook_secret = webhook_sub.add_parser("secret", help="manage webhook secrets")
+    webhook_secret_sub = webhook_secret.add_subparsers(dest="webhook_secret_cmd", required=True)
+    webhook_secret_set = webhook_secret_sub.add_parser("set")
+    webhook_secret_set.add_argument("source")
+    webhook_secret_set.add_argument("--value", default=None)
+    webhook_secret_rm = webhook_secret_sub.add_parser("rm")
+    webhook_secret_rm.add_argument("source")
+    webhook_sign = webhook_sub.add_parser("sign", help="sign a test webhook payload")
+    webhook_sign.add_argument("source")
+    webhook_sign.add_argument("--payload", required=True)
+    webhook_events = webhook_sub.add_parser("events", help="list webhook events")
+    webhook_events.add_argument("--limit", type=int, default=50)
+
     relay_p = sub.add_parser("relay", help="self-hosted E2EE sync relay")
     relay_sub = relay_p.add_subparsers(dest="relay_cmd", required=True)
     relay_serve = relay_sub.add_parser("serve", help="run the relay server")
@@ -560,6 +576,8 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                         item["ts"], item["status"], item["kind"], item["title"]
                     )
                 )
+    elif cmd == "webhook":
+        _webhook(args, conn, home)
     elif cmd == "privacy":
         _privacy(args, conn)
     elif cmd == "maintenance":
@@ -1323,6 +1341,39 @@ def _sync(args: argparse.Namespace, conn, home: Path) -> None:
                 info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
             )
         )
+
+
+def _webhook(args: argparse.Namespace, conn, home: Path) -> None:
+    if args.webhook_cmd == "secret":
+        if args.webhook_secret_cmd == "set":
+            value = args.value
+            if value is None:
+                if sys.stdin.isatty():
+                    value = getpass.getpass("webhook secret: ")
+                else:
+                    value = sys.stdin.read().strip()
+            if not value:
+                raise ValueError("webhook secret is empty")
+            webhook.set_secret(conn, home, args.source, value)
+            print("stored webhook secret {}".format(args.source))
+        else:
+            webhook.delete_secret(conn, home, args.source)
+            print("removed webhook secret {}".format(args.source))
+    elif args.webhook_cmd == "sign":
+        secret = webhook.get_secret(conn, home, args.source)
+        result = webhook.sign(secret, args.payload.encode("utf-8"))
+        if args.as_json:
+            _print_json(result)
+        else:
+            print("{}: {}".format(webhook.TIMESTAMP_HEADER, result["timestamp"]))
+            print("{}: {}".format(webhook.SIGNATURE_HEADER, result["signature"]))
+    elif args.webhook_cmd == "events":
+        items = webhook.list_events(conn, limit=args.limit)
+        if args.as_json:
+            _print_json(items)
+        else:
+            for item in items:
+                print("{}  {:<14} {}".format(item["ts"], item["source"], item["dedupe_key"] or "-"))
 
 
 def _privacy(args: argparse.Namespace, conn) -> None:

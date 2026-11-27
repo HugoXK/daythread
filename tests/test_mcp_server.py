@@ -50,6 +50,42 @@ class McpServerTest(unittest.TestCase):
         finally:
             client.close()
 
+    def test_resources_and_prompts(self):
+        client = self._client()
+        try:
+            client.start()
+            client.initialize()
+            resources = client.list_resources()
+            uris = {item["uri"] for item in resources}
+            self.assertIn("daythread://today", uris)
+            self.assertTrue(any(uri.startswith("daythread://memory/") for uri in uris))
+            content = client.read_resource("daythread://today")
+            self.assertIn("morning", content["contents"][0]["text"])
+            prompts = {item["name"] for item in client.list_prompts()}
+            self.assertIn("daythread.morning", prompts)
+            prompt = client.get_prompt("daythread.plan", {"intent": "plan my day"})
+            self.assertIn("plan my day", prompt["messages"][0]["content"]["text"])
+        finally:
+            client.close()
+
+    def test_sensitive_resource_is_hidden(self):
+        conn = connect(self.db_path)
+        try:
+            secret = memory.add_fact(conn, "self", "self", "token", "secret-value")
+            memory.edit_fact(conn, secret["id"], sensitivity="secret")
+        finally:
+            conn.close()
+        client = self._client()
+        try:
+            client.start()
+            client.initialize()
+            resources = client.list_resources()
+            self.assertFalse(any("secret-value" in str(item) for item in resources))
+            with self.assertRaises(McpError):
+                client.read_resource("daythread://memory/{}".format(secret["id"]))
+        finally:
+            client.close()
+
     def test_read_only_blocks_writes(self):
         client = self._client()
         try:

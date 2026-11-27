@@ -126,6 +126,22 @@ class McpStdioClient:
         result = self.request("tools/list", {}) or {}
         return list(result.get("tools", []))
 
+    def list_resources(self) -> List[Dict[str, Any]]:
+        result = self.request("resources/list", {}) or {}
+        return list(result.get("resources", []))
+
+    def read_resource(self, uri: str) -> Dict[str, Any]:
+        return self.request("resources/read", {"uri": uri}) or {}
+
+    def list_prompts(self) -> List[Dict[str, Any]]:
+        result = self.request("prompts/list", {}) or {}
+        return list(result.get("prompts", []))
+
+    def get_prompt(self, name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
+        return self.request(
+            "prompts/get", {"name": name, "arguments": arguments or {}}
+        ) or {}
+
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         result = self.request("tools/call", {"name": name, "arguments": arguments})
         return result or {}

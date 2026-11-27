@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0 — signed webhooks and MCP resources
+
+- Schema v6: `webhook_events` with dedupe and timestamp indexes.
+- Signed webhook ingestion: HMAC-SHA256, timestamp replay window, per-source
+  secrets, rate limits, dedupe, and signal/proactivity integration.
+- Server `POST /v1/webhooks/{source}` and CLI `dt webhook secret|sign|events`.
+- MCP resources: `daythread://today` and memory facts; sensitive resources are
+  blocked. MCP prompts: morning brief and plan proposal.
+- MCP client helpers for resources and prompts.
+- 209 unit tests.
+
 ## 0.12.0 — Feishu and Lark connectors
 
 - Feishu and Lark OAuth providers (accounts + open API domains).

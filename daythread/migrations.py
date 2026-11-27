@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_VERSION = 5
+LATEST_VERSION = 6
 
 
 def current_version(conn: sqlite3.Connection) -> int:
@@ -48,6 +48,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '5')")
         conn.commit()
         version = 5
+    if version < 6:
+        _migrate_v6(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '6')")
+        conn.commit()
+        version = 6
     return version
 
 
@@ -355,5 +360,24 @@ def _migrate_v5(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(updated_at);
         CREATE INDEX IF NOT EXISTS idx_connector_items_ts ON connector_items(ts);
         DELETE FROM model_cache;
+        """
+    )
+
+
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS webhook_events (
+            id         TEXT PRIMARY KEY,
+            source     TEXT NOT NULL,
+            dedupe_key TEXT,
+            payload    TEXT NOT NULL,
+            ts         TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'accepted'
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_dedupe
+            ON webhook_events(source, dedupe_key)
+            WHERE dedupe_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_webhook_ts ON webhook_events(ts);
         """
     )

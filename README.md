@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.12.0 — Feishu and Lark connectors.** Interfaces may still change. The goal
-is a small, correct, auditable core with tests (204 at this milestone, ~78% line
-coverage, 75% gate), not feature breadth.
+**v0.13.0 — signed webhooks and MCP resources.** Interfaces may still change.
+The goal is a small, correct, auditable core with tests (209 at this milestone,
+~77% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -41,8 +41,9 @@ coverage, 75% gate), not feature breadth.
 - **MCP client**: JSON-RPC 2.0 stdio client, server registry, tool discovery,
   and `mcp.call` behind the approval gate.
 - **MCP server**: `dt mcp serve` exposes briefs, memory, tasks, calendar,
-  approvals, connectors, and approval-gated plan proposals to other agents.
-  Read-only by default.
+  approvals, connectors, approval-gated plan proposals, resources
+  (`daythread://today`, memory facts), and prompts. Sensitive resources are
+  blocked. Read-only by default.
 - **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
   with a loopback callback, encrypted token storage and refresh, Google and
   Microsoft 365 Calendar/Mail adapters, Feishu/Lark Calendar and Tasks
@@ -61,8 +62,8 @@ coverage, 75% gate), not feature breadth.
   safety checks in a throwaway home.
 - **Local HTTP API**: bearer auth, Host allowlist, persistent per-token rate
   limits, request IDs, pagination, OpenAPI document, facts, runs, approvals,
-  candidates, notifications, connectors, models, ask, and Prometheus metrics.
-  Binds `127.0.0.1` only.
+  candidates, notifications, connectors, models, ask, signed webhooks, and
+  Prometheus metrics. Binds `127.0.0.1` only.
 - **Hardening**: atomic run leases, step timeouts, subprocess isolation for
   external/MCP/connector/shell tools with process-group kill, retention/pruning,
   signed backups, encrypted model cache, sensitivity filters, MCP command
@@ -121,6 +122,7 @@ dt ask "<text>" [--task NAME] [--no-cache] [--stream]
 dt model list|usage
 
 dt mcp add|list|remove|tools|call|serve
+dt webhook secret set|rm | webhook sign | webhook events
 dt signal add|list
 dt proactive [--deliver]
 dt candidate list
@@ -186,6 +188,11 @@ dt approve <run-id>
 # MCP server: expose Daythread to Claude/Cursor (read-only by default).
 dt mcp serve
 dt mcp serve --allow-write
+
+# Signed webhooks (HMAC + timestamp + dedupe).
+dt webhook secret set github
+dt webhook sign github --payload '{"id":"evt-1","title":"Deploy finished"}'
+dt webhook events
 
 # Scheduler and notifications.
 dt tick --job morning
@@ -373,6 +380,10 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   Feishu, and Lark are supported.
 - **Model egress**: `model.egress=local_only` rejects non-local providers;
   retries use bounded exponential backoff; streaming is opt-in.
+- **Webhooks**: HMAC-SHA256 over `timestamp.body`, timestamp replay window,
+  per-source encrypted secrets, rate limits, and dedupe; ingest as signals.
+- **MCP resources**: sensitive (`secret`/`health`) facts are excluded and cannot
+  be read by URI.
 - **MCP server**: read-only by default; write tools are hidden unless
   `--allow-write` is set; plans proposed by external agents require approval.
 - **Connector actions** are `external` by default: a run is created and must be
@@ -399,7 +410,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 
 ## Roadmap
 
-1. More OAuth providers and webhook/incremental sync.
+1. Provider-specific webhook verification and incremental sync cursors.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
