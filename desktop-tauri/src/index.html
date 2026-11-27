@@ -1,64 +1,148 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Daythread</title>
+<title>Daythread · 朝夕</title>
 <style>
-:root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e6e8ee; --muted:#9aa3b2; --accent:#7aa2ff; --danger:#ff7a90; }
-* { box-sizing:border-box; }
-body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
-header { display:flex; gap:12px; align-items:center; padding:14px 18px; border-bottom:1px solid #2a2f3a; }
-h1 { font-size:17px; margin:0; }
-main { display:grid; grid-template-columns:2fr 1fr; gap:14px; padding:16px; height:calc(100vh - 58px); }
-section { background:var(--panel); border:1px solid #262c37; border-radius:12px; padding:12px 14px; overflow:auto; }
-h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 8px; }
-pre { white-space:pre-wrap; font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; margin:0; }
-button { background:transparent; color:var(--text); border:1px solid #343b49; border-radius:8px; padding:5px 9px; cursor:pointer; }
-button.primary { color:var(--accent); border-color:var(--accent); }
-button.danger { color:var(--danger); border-color:var(--danger); }
-.item { border-top:1px solid #262c37; padding:8px 0; display:flex; gap:8px; justify-content:space-between; align-items:center; }
-.item:first-of-type { border-top:0; }
-.muted { color:var(--muted); }
+:root{--bg:#070A11;--bg2:#0B101B;--surface:rgba(18,24,38,.84);--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--text:#F2F6FD;--muted:#8D99AE;--faint:#5C677B;--warm:#FFB86B;--warm2:#FF8E72;--cool:#7AA2FF;--cool2:#B28CFF;--good:#5BD6A2;--warn:#FFC46B;--bad:#FF7A90;--radius:20px;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;color-scheme:dark}
+[data-theme=light]{--bg:#F4F6FB;--bg2:#EEF1F8;--surface:rgba(255,255,255,.9);--line:rgba(16,24,40,.08);--line2:rgba(16,24,40,.16);--text:#121826;--muted:#62708A;--faint:#8A96AB;--warm:#E78A2E;--warm2:#F0645A;--cool:#3B68F5;--cool2:#7A54E8;--good:#159B6B;--warn:#B9770E;--bad:#D92D4B;color-scheme:light}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,sans-serif;color:var(--text);background:radial-gradient(900px 620px at 6% -12%,rgba(255,184,107,.14),transparent 60%),radial-gradient(900px 680px at 104% -6%,rgba(122,162,255,.16),transparent 58%),linear-gradient(180deg,var(--bg),var(--bg2));background-attachment:fixed;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}
+.app{display:grid;grid-template-columns:244px minmax(0,1fr);min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;padding:22px 16px;border-right:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.03),transparent 40%);display:flex;flex-direction:column;gap:24px}
+.brand{display:flex;align-items:center;gap:12px;padding:4px 8px}.brand .mark{width:42px;height:42px;filter:drop-shadow(0 8px 20px rgba(255,184,107,.18))}.brand .name{font-size:17px;font-weight:650;letter-spacing:-.02em}.brand .sub{font-size:11px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase}
+nav{display:flex;flex-direction:column;gap:4px}.nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:0;border-radius:12px;background:transparent;color:var(--muted);text-align:left;transition:.18s}.nav-item svg{width:17px;height:17px}.nav-item:hover{background:rgba(255,255,255,.05);color:var(--text)}.nav-item.active{color:var(--text);background:linear-gradient(90deg,rgba(255,184,107,.14),rgba(122,162,255,.08));box-shadow:inset 0 0 0 1px var(--line)}
+.sidebar-footer{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 6px}.status{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}.status .dot{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 0 4px rgba(91,214,162,.12)}.icon-btn{width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--muted)}
+main{min-width:0;padding:28px clamp(20px,4vw,48px) 48px}.topbar{display:flex;align-items:flex-start;gap:16px;margin-bottom:22px}.topbar h1{margin:0;font-size:clamp(24px,3vw,34px);line-height:1.1;letter-spacing:-.03em}.topbar p{margin:6px 0 0;color:var(--muted)}.topbar .actions{margin-left:auto;display:flex;gap:8px}
+.btn{border:1px solid var(--line2);background:transparent;color:var(--text);padding:8px 12px;border-radius:10px;transition:.18s}.btn:hover{border-color:var(--cool);background:rgba(122,162,255,.08)}.btn.primary{border-color:transparent;background:linear-gradient(135deg,var(--warm),var(--warm2));color:#1A1206;font-weight:650}.btn.danger{border-color:rgba(255,122,144,.5);color:var(--bad)}.btn.small{padding:5px 9px;border-radius:8px;font-size:12px}
+.banner{display:none;margin-bottom:18px;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,122,144,.35);background:rgba(255,122,144,.08);color:var(--bad)}.banner.show{display:block}
+.view[hidden]{display:none}.hero{position:relative;overflow:hidden;border-radius:24px;border:1px solid var(--line);background:radial-gradient(700px 260px at 10% 0%,rgba(255,184,107,.14),transparent 60%),radial-gradient(620px 260px at 100% 0%,rgba(122,162,255,.14),transparent 60%),var(--surface);padding:24px 26px;box-shadow:0 24px 70px rgba(0,0,0,.38);margin-bottom:20px}.hero .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--warm);font-weight:650}.hero h2{margin:8px 0 6px;font-size:clamp(22px,3vw,32px);letter-spacing:-.03em}.hero p{margin:0;color:var(--muted);max-width:720px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.chip{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);font-size:12px}.chip b{color:var(--text);font-weight:600}.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--cool)}.chip.warm .dot{background:var(--warm)}.chip.warn .dot{background:var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px}.card{grid-column:span 4;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:18px;min-height:110px;box-shadow:0 10px 30px rgba(0,0,0,.12)}.card.wide{grid-column:span 8}.card.full{grid-column:1/-1}.card h3{margin:0 0 12px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:650;display:flex;justify-content:space-between}.card h3 span{font-variant-numeric:tabular-nums;color:var(--faint);letter-spacing:0}
+.list{display:flex;flex-direction:column}.row{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}.row:first-child{border-top:0;padding-top:0}.row:last-child{padding-bottom:0}.row .title{font-weight:550}.row .meta{color:var(--muted);font-size:12px;margin-top:2px}.row .actions{display:flex;gap:6px;flex-shrink:0}.mono{font-family:var(--mono);font-size:12px}.empty{color:var(--faint);font-size:13px;padding:8px 0}.empty::before{content:"—";margin-right:8px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid var(--line);color:var(--muted);background:rgba(255,255,255,.03)}.badge .dot{width:5px;height:5px;border-radius:50%;background:currentColor}.badge.pending{color:var(--warn);border-color:rgba(255,196,107,.35);background:rgba(255,196,107,.08)}.badge.completed{color:var(--good);border-color:rgba(91,214,162,.32);background:rgba(91,214,162,.08)}.badge.failed,.badge.denied,.badge.rejected{color:var(--bad);border-color:rgba(255,122,144,.32);background:rgba(255,122,144,.08)}
+.toolbar{display:flex;gap:10px;margin-bottom:16px}.search{flex:1;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:10px 14px}.search input{flex:1;border:0;outline:0;background:transparent;color:var(--text)}
+@media(max-width:1040px){.app{grid-template-columns:76px minmax(0,1fr)}.brand .name,.brand .sub,.nav-item span,.sidebar-footer .status{display:none}.sidebar{align-items:center;padding:20px 10px}.nav-item{justify-content:center}.card{grid-column:span 6}.card.wide{grid-column:span 12}}
 </style>
 </head>
 <body>
-<header>
-  <h1>Daythread · 朝夕</h1>
-  <span id="status" class="muted">loading…</span>
-  <span style="flex:1"></span>
-  <button onclick="refresh()">Refresh</button>
-</header>
-<main>
-  <section><h2>Today</h2><pre id="today">—</pre></section>
-  <section><h2>Runs</h2><div id="runs" class="muted">—</div></section>
-</main>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <linearGradient id="mg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A1020"/><stop offset=".6" stop-color="#141D31"/><stop offset="1" stop-color="#1C2A48"/></linearGradient>
+          <linearGradient id="mt" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFB86B"/><stop offset=".5" stop-color="#FFD7A1"/><stop offset="1" stop-color="#7AA2FF"/></linearGradient>
+          <radialGradient id="ms" cx="50%" cy="45%" r="55%"><stop offset="0" stop-color="#FFF2D6"/><stop offset=".6" stop-color="#FFD7A1"/><stop offset="1" stop-color="#FFB86B"/></radialGradient>
+        </defs>
+        <rect width="64" height="64" rx="15" fill="url(#mg)"/>
+        <path d="M13 42H51" stroke="#fff" stroke-opacity=".14" stroke-width="1.2" stroke-linecap="round"/>
+        <path d="M15 42C20 27 26 21 32 21C38 21 44 27 49 42" fill="none" stroke="url(#mt)" stroke-width="3.2" stroke-linecap="round"/>
+        <circle cx="32" cy="25" r="4.2" fill="url(#ms)"/><circle cx="15" cy="42" r="1.5" fill="#FFB86B"/><circle cx="49" cy="42" r="1.5" fill="#7AA2FF"/>
+      </svg>
+      <div><div class="name">Daythread</div><div class="sub">朝夕</div></div>
+    </div>
+    <nav id="nav">
+      <button class="nav-item active" data-view="today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg><span>Today</span></button>
+      <button class="nav-item" data-view="runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Runs</span></button>
+      <button class="nav-item" data-view="memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Memory</span></button>
+    </nav>
+    <div class="sidebar-footer"><div class="status"><span class="dot"></span><span id="status">connecting</span></div><button class="icon-btn" id="theme">◐</button></div>
+  </aside>
+  <main>
+    <header class="topbar"><div><h1 id="title">Today</h1><p id="subtitle">A thread from dawn to dusk.</p></div><div class="actions"><button class="btn" id="refresh">Refresh</button></div></header>
+    <div class="banner" id="banner"></div>
+    <section class="view" id="view-today">
+      <div class="hero"><div class="eyebrow" id="eyebrow">Morning brief</div><h2 id="greeting">Good morning.</h2><p id="herosub">Here is what changed, what matters, and what needs you.</p><div class="chips" id="chips"></div></div>
+      <div class="grid">
+        <article class="card"><h3>Calendar <span id="count-calendar"></span></h3><div class="list" id="calendar"></div></article>
+        <article class="card"><h3>Tasks <span id="count-tasks"></span></h3><div class="list" id="tasks"></div></article>
+        <article class="card"><h3>Commitments <span id="count-commitments"></span></h3><div class="list" id="commitments"></div></article>
+        <article class="card wide"><h3>Needs attention <span id="count-candidates"></span></h3><div class="list" id="candidates"></div></article>
+        <article class="card"><h3>Approvals <span id="count-approvals"></span></h3><div class="list" id="approvals"></div></article>
+        <article class="card wide"><h3>Messages <span id="count-messages"></span></h3><div class="list" id="messages"></div></article>
+      </div>
+    </section>
+    <section class="view" id="view-runs" hidden><div class="card full"><h3>Recent runs <span id="count-runs"></span></h3><div class="list" id="runs"></div></div></section>
+    <section class="view" id="view-memory" hidden>
+      <div class="toolbar"><div class="search"><input id="q" placeholder="Search people, projects, preferences…"><button class="btn small" id="search-btn">Search</button></div></div>
+      <div class="card full"><h3>Facts <span id="count-facts"></span></h3><div class="list" id="facts"></div></div>
+    </section>
+  </main>
+</div>
 <script>
 const invoke = window.__TAURI__.core.invoke;
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $ = (id) => document.getElementById(id);
+const state = {today: null, runs: [], facts: [], view: 'today'};
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function run(args) { return invoke('run_dt', {args}); }
-async function refresh() {
+function fmtTime(value) { if (!value) return ''; const d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat(undefined, {hour:'2-digit', minute:'2-digit'}).format(d); }
+function fmtDate(value) { const d = value ? new Date(value) : new Date(); return new Intl.DateTimeFormat(undefined, {weekday:'long', month:'long', day:'numeric'}).format(d); }
+function greeting() { const h = new Date().getHours(); return h < 5 ? 'Still up?' : h < 12 ? 'Good morning.' : h < 18 ? 'Good afternoon.' : 'Good evening.'; }
+function empty(t) { return `<div class="empty">${esc(t)}</div>`; }
+function row(title, meta, actions = '', mono = '') { return `<div class="row"><div><div class="title ${mono}">${title}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</div>${actions ? `<div class="actions">${actions}</div>` : ''}</div>`; }
+function badge(s) { const c = s === 'pending_approval' ? 'pending' : s; return `<span class="badge ${esc(c)}"><span class="dot"></span>${esc(s.replace('_',' '))}</span>`; }
+async function load() {
+  $('status').textContent = 'syncing';
   try {
-    document.getElementById('today').textContent = await run(['brief']);
-    const runs = JSON.parse(await run(['--json','runs','--limit','20']));
-    const box = document.getElementById('runs');
-    box.innerHTML = runs.length ? runs.map(r => {
-      const actions = r.state === 'pending_approval'
-        ? `<button class="primary" onclick="act('${r.id}','approve')">Approve</button> <button class="danger" onclick="act('${r.id}','reject')">Reject</button>`
-        : (r.state === 'completed' ? `<button onclick="act('${r.id}','undo')">Undo</button>` : '');
-      return `<div class="item"><span>${esc(r.tool)} · ${esc(r.state)}<br><span class="muted">${esc(r.intent)}</span></span><span>${actions}</span></div>`;
-    }).join('') : '<span class="muted">No runs.</span>';
-    document.getElementById('status').textContent = 'online';
-  } catch (error) {
-    document.getElementById('status').textContent = String(error);
-  }
+    const today = JSON.parse(await run(['--json','brief']));
+    const runs = JSON.parse(await run(['--json','runs','--limit','30']));
+    state.today = today; state.runs = runs;
+    renderToday(today); renderRuns(runs);
+    $('status').textContent = 'online';
+  } catch (e) { $('banner').textContent = String(e); $('banner').classList.add('show'); $('status').textContent = 'offline'; }
 }
-async function act(id, action) {
-  try { await run([action, id]); await refresh(); }
-  catch (error) { document.getElementById('status').textContent = String(error); }
+function renderToday(t) {
+  const events = t.calendar || [], tasks = t.tasks || [], commitments = t.commitments || [], messages = t.messages || [], candidates = t.candidates || [], approvals = t.pending_approvals || [];
+  $('eyebrow').textContent = t.kind === 'evening' ? 'Evening review' : 'Morning brief';
+  $('greeting').textContent = greeting();
+  $('herosub').textContent = fmtDate(t.date) + ' · what changed, what matters, and what needs you.';
+  $('chips').innerHTML = [
+    `<span class="chip warm"><span class="dot"></span><b>${events.length}</b> events</span>`,
+    `<span class="chip"><span class="dot"></span><b>${tasks.length}</b> tasks</span>`,
+    `<span class="chip warn"><span class="dot"></span><b>${approvals.length}</b> approvals</span>`,
+    `<span class="chip"><span class="dot"></span><b>${candidates.length}</b> signals</span>`
+  ].join('');
+  $('count-calendar').textContent = events.length || '';
+  $('calendar').innerHTML = events.length ? events.map(e => row(esc(e.title), `${fmtTime(e.start)}${e.end ? ' – ' + fmtTime(e.end) : ''}`)).join('') : empty('No events today.');
+  $('count-tasks').textContent = tasks.length || '';
+  $('tasks').innerHTML = tasks.length ? tasks.map(t => row(esc(t.title), t.due ? `Due ${esc(t.due)}` : 'No due date')).join('') : empty('Nothing due.');
+  $('count-commitments').textContent = commitments.length || '';
+  $('commitments').innerHTML = commitments.length ? commitments.map(f => row(esc(f.subject_id) + ' · ' + esc(f.predicate), esc(typeof f.object === 'string' ? f.object : JSON.stringify(f.object)))).join('') : empty('No open commitments.');
+  $('count-candidates').textContent = candidates.length || '';
+  $('candidates').innerHTML = candidates.length ? candidates.map(c => row(esc(c.title), `${esc(c.kind)} · score ${Number(c.score).toFixed(2)}`)).join('') : empty('Nothing needs attention.');
+  $('count-approvals').textContent = approvals.length || '';
+  $('approvals').innerHTML = approvals.length ? approvals.map(r => row(esc(r.tool), esc(r.intent || ''), `<button class="btn small primary" onclick="act('${esc(r.id)}','approve')">Approve</button> <button class="btn small danger" onclick="act('${esc(r.id)}','reject')">Reject</button>`)).join('') : empty('Nothing waiting.');
+  $('count-messages').textContent = messages.length || '';
+  $('messages').innerHTML = messages.length ? messages.map(m => row(esc(m.subject || '(no subject)'), esc(m.sender || ''))).join('') : empty('Inbox is quiet.');
 }
-refresh();
-setInterval(refresh, 30000);
+function renderRuns(runs) {
+  $('count-runs').textContent = runs.length || '';
+  $('runs').innerHTML = runs.length ? runs.map(r => {
+    const actions = r.state === 'pending_approval' ? `<button class="btn small primary" onclick="act('${esc(r.id)}','approve')">Approve</button> <button class="btn small danger" onclick="act('${esc(r.id)}','reject')">Reject</button>` : (r.state === 'completed' ? `<button class="btn small" onclick="act('${esc(r.id)}','undo')">Undo</button>` : '');
+    return row(`${badge(r.state)} <span class="mono">${esc(r.tool)}</span>`, esc(r.intent), actions);
+  }).join('') : empty('No runs yet.');
+}
+async function act(id, action) { try { await run([action, id]); await load(); } catch (e) { $('banner').textContent = String(e); $('banner').classList.add('show'); } }
+async function search() {
+  const q = $('q').value.trim(); if (!q) return;
+  try { const facts = JSON.parse(await run(['--json','fact','search',q])); state.facts = facts; $('count-facts').textContent = facts.length || ''; $('facts').innerHTML = facts.length ? facts.map(f => row(esc(f.subject_id) + ' · ' + esc(f.predicate), esc(typeof f.object === 'string' ? f.object : JSON.stringify(f.object)), '', 'mono')).join('') : empty('No matching facts.'); }
+  catch (e) { $('banner').textContent = String(e); $('banner').classList.add('show'); }
+}
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  ['today','runs','memory'].forEach(s => $('view-' + s).hidden = s !== view);
+  const titles = {today:['Today','A thread from dawn to dusk.'], runs:['Runs','Every action, approval, and undo.'], memory:['Memory','Facts you can read, edit, and forget.']};
+  $('title').textContent = titles[view][0]; $('subtitle').textContent = titles[view][1];
+}
+function applyTheme(theme) { document.documentElement.dataset.theme = theme; localStorage.setItem('daythread-theme', theme); $('theme').textContent = theme === 'dark' ? '◐' : '◑'; }
+document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+$('refresh').addEventListener('click', load);
+$('search-btn').addEventListener('click', search);
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+$('theme').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+applyTheme(localStorage.getItem('daythread-theme') || 'dark');
+setView('today'); load(); setInterval(load, 30000);
 </script>
 </body>
 </html>

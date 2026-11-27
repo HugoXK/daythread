@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/png/logo.png" alt="Daythread · 朝夕" width="720" />
+</p>
+
 # Daythread · 朝夕
 
 > **Your day, dawn to dusk — local-first, auditable, yours.**
@@ -15,9 +19,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.23.0 — attestations, evidence, and sidecar.** Interfaces may still change.
-The goal is a small, correct, auditable core with tests (239 at this milestone,
-~78% line coverage, 75% gate), not feature breadth.
+**v0.24.0 — brand and UI redesign.** Interfaces may still change. The goal is a
+small, correct, auditable core with tests (239 at this milestone, ~78% line
+coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -477,6 +481,16 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
 5. Linux/Docker sandboxing and cosign/SBOM attestations for releases.
+
+## Design
+
+The identity is built around a single **thread from dawn to dusk**: a warm
+sunrise dot, a cool dusk dot, and one arc that connects them. The palette pairs
+`#FFB86B` / `#FF8E72` (dawn) with `#7AA2FF` / `#B28CFF` (dusk) on a deep navy
+canvas. The same tokens drive the web dashboard, Tauri app, and SwiftUI shell.
+
+Assets: `assets/icon.svg`, `assets/logo.svg`, `assets/logo-mark.svg`,
+`assets/AppIcon.icns`; regenerate with `make icons`.
 
 ## Documentation
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.24.0 — brand and UI redesign
+
+- New Daythread / 朝夕 identity: dawn-to-dusk thread mark, warm/cool gradient,
+  squircle app icon, macOS `.icns`, Tauri icon set.
+- Redesigned `dt ui`: sidebar shell, hero brief, cards, badges, run table,
+  memory search, connectors, light/dark theme, skeleton/empty states.
+- Redesigned Tauri and SwiftUI shells to match the same visual language.
+- Logo, wordmark, and PNG assets under `assets/`.
+- 239 unit tests.
+
 ## 0.23.0 — attestations, evidence, and sidecar
 
 - Signed DSSE/in-toto SLSA-style attestation over release artifacts and SBOM.
