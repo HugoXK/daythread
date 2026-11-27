@@ -240,6 +240,7 @@ def _make_handler(home: Path, db_path: Path, token: str):
                     intent=body.get("intent"),
                     idempotency_key=self.headers.get("Idempotency-Key"),
                     force_approval=bool(body.get("force_approval", False)),
+                    taint=str(body.get("taint", "trusted")),
                 )
                 return 201, run
             if method == "GET" and path.startswith("/v1/runs/"):

@@ -145,11 +145,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--file", default=None, help="JSON plan file with steps")
     plan.add_argument("--execute", action="store_true")
     plan.add_argument("--idempotency-key", default=None)
+    plan.add_argument("--taint", choices=("trusted", "untrusted"), default="trusted")
 
     act = sub.add_parser("act", help="propose a tool action (runs the policy gate)")
     act.add_argument("tool", help="tool name, e.g. note.write or message.send")
     act.add_argument("--intent", default=None)
     act.add_argument("--idempotency-key", default=None)
+    act.add_argument("--taint", choices=("trusted", "untrusted"), default="trusted")
     act.add_argument(
         "--arg",
         action="append",
@@ -336,6 +338,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     backup_p = sub.add_parser("backup", help="create a checksummed local backup")
     backup_p.add_argument("--out", default=None)
+    backup_p.add_argument("--passphrase", default=None)
+    backup_p.add_argument("--passphrase-env", default="DAYTHREAD_BACKUP_PASSPHRASE")
 
     bench_p = sub.add_parser("bench", help="run Daythread Bench v0 in a temp home")
     bench_p.add_argument("--facts", type=int, default=300)
@@ -346,6 +350,8 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--replace", action="store_true")
     restore.add_argument("--verify", action="store_true")
     restore.add_argument("--trust", action="store_true", help="skip backup signature verification")
+    restore.add_argument("--passphrase", default=None)
+    restore.add_argument("--passphrase-env", default="DAYTHREAD_BACKUP_PASSPHRASE")
 
 
     secret = sub.add_parser("secret", help="encrypted local secret vault")
@@ -481,6 +487,7 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
             payload,
             intent=args.intent,
             idempotency_key=args.idempotency_key,
+            taint=args.taint,
         )
         _print_run(run, args.as_json)
     elif cmd == "runs":
@@ -621,7 +628,10 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
         _bench(args)
     elif cmd == "backup":
         path = backup.create_backup(
-            conn, home, Path(args.out).expanduser() if args.out else None
+            conn,
+            home,
+            Path(args.out).expanduser() if args.out else None,
+            passphrase=_backup_passphrase(args),
         )
         if args.as_json:
             _print_json({"path": str(path)})
@@ -630,7 +640,9 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
     elif cmd == "restore":
         path = Path(args.path).expanduser()
         if args.verify:
-            info = backup.verify_backup(path, home=home)
+            info = backup.verify_backup(
+                path, home=home, passphrase=_backup_passphrase(args)
+            )
             _print_json(info) if args.as_json else print(
                 "backup OK: {} ({} fact(s), schema v{})".format(
                     info["created_at"], info["counts"].get("facts", 0), info["schema_version"]
@@ -643,6 +655,7 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
                 replace=args.replace,
                 home=home,
                 verify_signature=not args.trust,
+                passphrase=_backup_passphrase(args),
             )
             _print_json(counts) if args.as_json else print(
                 "restored: {}".format(json.dumps(counts, sort_keys=True))
@@ -838,6 +851,7 @@ def _plan(args: argparse.Namespace, conn, home: Path) -> None:
             steps,
             intent=intent,
             idempotency_key=args.idempotency_key,
+            taint=args.taint,
         )
         _print_run(run, args.as_json, steps=True)
         return
@@ -1292,6 +1306,17 @@ def _secret(args: argparse.Namespace, conn, home: Path) -> None:
         print("removed secret {}".format(args.name))
 
 
+def _backup_passphrase(args: argparse.Namespace):
+    if args.passphrase:
+        return args.passphrase
+    value = os.environ.get(args.passphrase_env)
+    if value:
+        return value
+    if sys.stdin.isatty():
+        return getpass.getpass("backup passphrase (blank for signed plaintext): ")
+    return None
+
+
 def _passphrase(args: argparse.Namespace) -> str:
     if args.passphrase:
         return args.passphrase
@@ -1637,6 +1662,8 @@ def _print_run(
         )
     )
     print("  intent: {}".format(run["intent"]))
+    if run.get("taint") == "untrusted":
+        print("  taint:  untrusted (write/external steps require approval)")
     plan_steps = (run.get("plan") or {}).get("steps", [])
     if len(plan_steps) > 1:
         print("  plan:")

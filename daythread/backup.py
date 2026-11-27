@@ -16,6 +16,7 @@ from .db import canonical, row_to_dict, utc_now
 from .errors import BackupError
 
 FORMAT = "daythread.backup.v1"
+ENC_FORMAT = "daythread.backup.enc.v1"
 TABLES = (
     "facts",
     "fact_history",
@@ -67,15 +68,24 @@ def create_backup(
     conn: sqlite3.Connection,
     home: Path,
     out_dir: Optional[Path] = None,
+    passphrase: Optional[str] = None,
 ) -> Path:
     directory = Path(out_dir) if out_dir else Path(home) / "backups"
     directory.mkdir(parents=True, exist_ok=True)
     data = build_payload(conn)
-    checksum = _checksum(data)
-    bundle = {"format": FORMAT, "checksum": checksum, "data": data}
-    if crypto.HAVE_CRYPTO:
-        bundle["signature_alg"] = "hmac-sha256"
-        bundle["signature"] = _signature(data, home)
+    if passphrase:
+        envelope = crypto.encrypt(passphrase, canonical(data).encode("utf-8"))
+        bundle = {
+            "format": ENC_FORMAT,
+            "created_at": utc_now(),
+            **envelope,
+        }
+    else:
+        checksum = _checksum(data)
+        bundle = {"format": FORMAT, "checksum": checksum, "data": data}
+        if crypto.HAVE_CRYPTO:
+            bundle["signature_alg"] = "hmac-sha256"
+            bundle["signature"] = _signature(data, home)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = directory / "daythread-{}.json".format(stamp)
     path.write_text(
@@ -90,18 +100,28 @@ def load_backup(
     path: Path,
     home: Optional[Path] = None,
     verify_signature: bool = True,
+    passphrase: Optional[str] = None,
 ) -> Dict[str, Any]:
     path = Path(path)
     try:
         bundle = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise BackupError("cannot read backup: {}".format(exc))
-    if bundle.get("format") != FORMAT:
+    if bundle.get("format") == ENC_FORMAT:
+        if not passphrase:
+            raise BackupError("encrypted backup requires a passphrase")
+        plaintext = crypto.decrypt(passphrase, bundle)
+        try:
+            data = json.loads(plaintext.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise BackupError("encrypted backup payload is invalid")
+    elif bundle.get("format") != FORMAT:
         raise BackupError("unsupported backup format")
-    data = bundle.get("data")
+    else:
+        data = bundle.get("data")
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise BackupError("invalid backup payload")
-    if bundle.get("checksum") != _checksum(data):
+    if bundle.get("format") == FORMAT and bundle.get("checksum") != _checksum(data):
         raise BackupError("backup checksum mismatch")
     signature = bundle.get("signature")
     if signature and verify_signature:
@@ -122,10 +142,16 @@ def restore_backup(
     replace: bool = False,
     home: Optional[Path] = None,
     verify_signature: bool = True,
+    passphrase: Optional[str] = None,
 ) -> Dict[str, int]:
     return restore_payload(
         conn,
-        load_backup(path, home=home, verify_signature=verify_signature),
+        load_backup(
+            path,
+            home=home,
+            verify_signature=verify_signature,
+            passphrase=passphrase,
+        ),
         replace=replace,
     )
 
@@ -156,13 +182,18 @@ def restore_payload(
     return counts
 
 
-def verify_backup(path: Path, home: Optional[Path] = None) -> Dict[str, Any]:
-    data = load_backup(path, home=home)
+def verify_backup(
+    path: Path,
+    home: Optional[Path] = None,
+    passphrase: Optional[str] = None,
+) -> Dict[str, Any]:
+    data = load_backup(path, home=home, passphrase=passphrase)
     return {
         "format": data["format"],
         "schema_version": data["schema_version"],
         "created_at": data["created_at"],
         "counts": data.get("counts", {}),
+        "encrypted": passphrase is not None,
     }
 
 

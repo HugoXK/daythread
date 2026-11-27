@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.0 — taint approval, encrypted backups, observability
+
+- Schema v8: `runs.taint`; untrusted plans force approval for any non-read step.
+- `--taint untrusted` on CLI plan/act; API `taint`; MCP proposals default
+  untrusted.
+- Encrypted backups: passphrase AES-GCM, `verify`/`restore` support, CLI
+  `--passphrase-env DAYTHREAD_BACKUP_PASSPHRASE`.
+- Prometheus scrape config and a starter Grafana dashboard in `deploy/`.
+- 226 unit tests.
+
 ## 0.16.0 — native macOS shell
 
 - SwiftUI macOS app (`desktop/`) driving the `dt` CLI: Today brief, run list

@@ -94,6 +94,19 @@ class ServerV3Test(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(notifications), 1)
 
+    def test_untrusted_run_requires_approval(self):
+        status, run, _ = self.request(
+            "POST",
+            "/v1/runs",
+            {
+                "steps": [{"id": "s1", "tool": "note.write", "args": {"path": "a.md", "content": "A"}}],
+                "taint": "untrusted",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(run["state"], "pending_approval")
+        self.assertEqual(run["taint"], "untrusted")
+
     def test_ask_echo(self):
         status, body, _ = self.request("POST", "/v1/ask", {"text": "hello"})
         self.assertEqual(status, 200)

@@ -99,6 +99,7 @@ def _schemas() -> List[Dict[str, Any]]:
                 "properties": {
                     "steps": {"type": "array", "items": {"type": "object"}},
                     "intent": {"type": "string"},
+                    "taint": {"type": "string", "enum": ["trusted", "untrusted"]},
                 },
                 "required": ["steps"],
             },
@@ -332,6 +333,7 @@ def _call(conn, home: Path, name: str, arguments: Dict[str, Any]) -> Any:
             steps or [],
             intent=arguments.get("intent"),
             force_approval=True,
+            taint=str(arguments.get("taint", "untrusted")),
         )
         return {
             "id": run["id"],

@@ -253,8 +253,11 @@ def propose_plan(
     budget: Optional[Dict[str, Any]] = None,
     parent_run: Optional[str] = None,
     force_approval: bool = False,
+    taint: str = "trusted",
 ) -> Dict[str, Any]:
     normalized = planner.validate(steps)
+    if taint not in ("trusted", "untrusted"):
+        raise ValueError("taint must be trusted or untrusted")
 
     if idempotency_key:
         existing = conn.execute(
@@ -265,7 +268,7 @@ def propose_plan(
 
     decisions = _decisions(conn, normalized)
     aggregate = _aggregate(decisions)
-    if force_approval and aggregate["state"] == "approved":
+    if (force_approval or taint == "untrusted") and aggregate["state"] == "approved":
         if any(item["risk"] != "read" for item in decisions):
             aggregate = {
                 "decision": "ask",
@@ -291,8 +294,8 @@ def propose_plan(
             """
             INSERT INTO runs(
                 id, intent, tool, args, state, risk, decision, created_at, updated_at,
-                plan, budget, checkpoint, trace_id, idempotency_key, parent_run
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                plan, budget, checkpoint, trace_id, idempotency_key, parent_run, taint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -310,6 +313,7 @@ def propose_plan(
                 trace_id,
                 idempotency_key,
                 parent_run,
+                taint,
             ),
         )
         conn.commit()
@@ -330,6 +334,7 @@ def propose_plan(
             "args": args,
             "intent": intent,
             "risk": aggregate["risk"],
+            "taint": taint,
             "steps": normalized if not single else None,
         },
     )
@@ -366,6 +371,7 @@ def propose(
     args: Dict[str, Any],
     intent: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    taint: str = "trusted",
 ) -> Dict[str, Any]:
     return propose_plan(
         conn,
@@ -373,6 +379,7 @@ def propose(
         [{"id": "s1", "tool": tool_name, "args": args}],
         intent=intent,
         idempotency_key=idempotency_key,
+        taint=taint,
     )
 
 

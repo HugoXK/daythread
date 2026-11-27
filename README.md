@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.16.0 — native macOS shell.** Interfaces may still change. The goal is a
-small, correct, auditable core with tests (221 at this milestone, ~78% line
-coverage, 75% gate), not feature breadth.
+**v0.17.0 — taint approval, encrypted backups, observability.** Interfaces may
+still change. The goal is a small, correct, auditable core with tests (226 at
+this milestone, ~78% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -121,7 +121,7 @@ dt init | migrate | doctor | demo
 dt fact add|list|show|edit|rm|search|extract|history|conflicts|import
 dt task list|create|done|update
 dt brief [--evening]
-dt plan "<intent>" [--execute] [--file plan.json] [--idempotency-key K]
+dt plan "<intent>" [--execute] [--file plan.json] [--idempotency-key K] [--taint untrusted]
 dt act <tool> --arg k=v [--idempotency-key K]
 dt runs | show | approve | reject | undo | resume | cancel | ledger
 dt policy show|set
@@ -155,7 +155,8 @@ dt metrics | audit | export [--format md|json] [--include-sensitive]
 dt maintenance stats|prune [--older-than N] [--keep-runs N] [--vacuum]
 dt privacy export|forget|purge
 dt fact list|search ... [--include-sensitive]
-dt backup [--out DIR] | restore <file> [--verify] [--replace] [--trust]
+dt backup [--out DIR] [--passphrase-env DAYTHREAD_BACKUP_PASSPHRASE]
+dt restore <file> [--verify] [--replace] [--trust] [--passphrase-env ...]
 dt serve [--host 127.0.0.1] [--port 8765] [--print-token] [--rotate-token]
 ```
 
@@ -247,8 +248,9 @@ dt connector auth feishu.calendar --no-browser
 dt connector sync feishu.tasks
 dt connector call feishu.tasks create_task --arg title="Review deck" --arg due=2026-11-27T10:00:00Z
 
-# Backup and restore (signed with the device master key).
+# Backup and restore (signed; optionally encrypted).
 dt backup
+DAYTHREAD_BACKUP_PASSPHRASE=... dt backup
 dt restore ~/.daythread/backups/daythread-*.json --verify
 dt restore ~/.daythread/backups/daythread-*.json
 dt restore ~/.daythread/backups/daythread-*.json --trust   # new device / new home
@@ -379,8 +381,11 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   calls are `external` by default.
 - **Local API**: `127.0.0.1` only, bearer token in a `0600` file, rate limited,
   no CORS.
-- **Backups**: checksummed, HMAC-signed, versioned, and redact known secrets.
-  `restore --trust` is required when the master key is not present.
+- **Backups**: checksummed, HMAC-signed, optional passphrase AES-GCM
+  encryption, versioned, and redact known secrets. `restore --trust` is required
+  when the master key is not present.
+- **Taint**: `taint=untrusted` (external agent content, webhooks, email) forces
+  approval for every non-read step even if the policy would auto-allow.
 - **Runtime leases**: only one executor can claim a run; leases expire and are
   released on completion/failure. External/MCP/connector/shell steps run in a
   subprocess and are killed by process group on timeout, including server

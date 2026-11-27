@@ -214,6 +214,26 @@ class CliV3Test(unittest.TestCase):
         self.assertEqual(authorize.call_args.args[2], "google.calendar")
         self.assertFalse(authorize.call_args.kwargs["open_browser"])
 
+    def test_untrusted_act_requires_approval(self):
+        code, out, _ = run_cli(
+            [
+                "--home",
+                self.home,
+                "--json",
+                "act",
+                "note.write",
+                "--arg",
+                "path=a.md",
+                "--arg",
+                "content=A",
+                "--taint",
+                "untrusted",
+            ]
+        )
+        self.assertEqual(code, 0)
+        run = json.loads(out)
+        self.assertEqual(run["state"], "pending_approval")
+
     def test_connector_call_proposes(self):
         run_cli(["--home", self.home, "connector", "connect", "mock.gcal"])
         code, out, _ = run_cli(

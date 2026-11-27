@@ -15,8 +15,10 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml exec api dt serve --print-token
 ```
 
-The API is published on `127.0.0.1:8765`; the relay on `127.0.0.1:8788`.
-Volumes hold the SQLite database, master key, backups, and relay bundles.
+The API is published on `127.0.0.1:8765`; the relay on `127.0.0.1:8788`;
+Prometheus on `127.0.0.1:9090`. Volumes hold the SQLite database, master key,
+backups, and relay bundles. Import `grafana/daythread.json` for a starter
+dashboard.
 
 ## systemd
 

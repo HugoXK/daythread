@@ -16,6 +16,15 @@ services:
       timeout: 10s
       retries: 3
 
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - daythread-data:/data:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
   relay:
     build:
       context: ..

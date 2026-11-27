@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-LATEST_VERSION = 7
+LATEST_VERSION = 8
 
 
 def current_version(conn: sqlite3.Connection) -> int:
@@ -58,6 +58,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '7')")
         conn.commit()
         version = 7
+    if version < 8:
+        _migrate_v8(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '8')")
+        conn.commit()
+        version = 8
     return version
 
 
@@ -400,3 +405,7 @@ def _migrate_v7(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+
+def _migrate_v8(conn: sqlite3.Connection) -> None:
+    _add_column(conn, "runs", "taint", "TEXT NOT NULL DEFAULT 'trusted'")

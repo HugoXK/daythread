@@ -1,0 +1,44 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Model tokens",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "daythread_model_tokens", "legendFormat": "tokens"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Model errors / retries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "daythread_model_errors", "legendFormat": "errors"},
+        {"expr": "daythread_model_retries", "legendFormat": "retries"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Runs",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "daythread_runs_created", "legendFormat": "created"},
+        {"expr": "daythread_runs_completed", "legendFormat": "completed"},
+        {"expr": "daythread_runs_failed", "legendFormat": "failed"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Proactivity / webhooks",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "daythread_proactivity_interrupts", "legendFormat": "interrupts"},
+        {"expr": "daythread_webhooks_ingested", "legendFormat": "webhooks"}
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "title": "Daythread",
+  "timezone": "browser",
+  "version": 1
+}

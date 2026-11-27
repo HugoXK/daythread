@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from daythread import backup, connectors, mcp, memory, policy, skills
+from daythread import backup, connectors, crypto, mcp, memory, policy, skills
 from daythread.db import connect, init_db, set_setting
 from daythread.errors import BackupError
 
@@ -76,6 +76,30 @@ class BackupTest(unittest.TestCase):
         path.write_text(json.dumps(bundle), encoding="utf-8")
         with self.assertRaises(BackupError):
             backup.load_backup(path, home=self.home)
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_encrypted_backup_roundtrip(self):
+        self._seed()
+        path = backup.create_backup(self.conn, self.home, passphrase="backup-pass")
+        encoded = path.read_text(encoding="utf-8")
+        self.assertNotIn("co-founder", encoded)
+        info = backup.verify_backup(path, passphrase="backup-pass")
+        self.assertTrue(info["encrypted"])
+        with self.assertRaises(Exception):
+            backup.verify_backup(path)
+        with self.assertRaises(Exception):
+            backup.verify_backup(path, passphrase="wrong")
+
+        new_home = Path(self.tmp.name) / "enc-restored"
+        new_conn = connect(new_home / "db.sqlite")
+        init_db(new_conn)
+        try:
+            counts = backup.restore_backup(
+                new_conn, path, passphrase="backup-pass"
+            )
+            self.assertEqual(counts["facts"], 1)
+        finally:
+            new_conn.close()
 
     def test_secrets_are_redacted(self):
         self._seed()

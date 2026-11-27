@@ -122,6 +122,29 @@ class RuntimeV2Test(unittest.TestCase):
         self.assertEqual(blocked["state"], "failed")
         self.assertIn("absolute paths", blocked["error"])
 
+    def test_untrusted_taint_forces_approval(self):
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "note.write",
+            {"path": "a.md", "content": "A"},
+            taint="untrusted",
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        self.assertEqual(run["taint"], "untrusted")
+        run = runtime.approve(self.conn, self.home, run["id"])
+        self.assertEqual(run["state"], "completed")
+
+    def test_read_only_taint_can_auto_run(self):
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "task.list",
+            {},
+            taint="untrusted",
+        )
+        self.assertEqual(run["state"], "completed")
+
     def test_force_approval_even_for_write(self):
         run = runtime.propose_plan(
             self.conn,
