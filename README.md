@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.15.0 — OS sandbox, release artifacts, and dashboard.** Interfaces may still
-change. The goal is a small, correct, auditable core with tests (221 at this
-milestone, ~77% line coverage, 75% gate), not feature breadth.
+**v0.16.0 — native macOS shell.** Interfaces may still change. The goal is a
+small, correct, auditable core with tests (221 at this milestone, ~78% line
+coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -77,6 +77,8 @@ milestone, ~77% line coverage, 75% gate), not feature breadth.
   audit records.
 - **Dashboard**: `dt ui` serves a loopback dashboard for briefs, approvals,
   runs, and memory search.
+- **Native shell**: `desktop/` is a SwiftUI macOS app that drives `dt` (Today,
+  runs, approve/reject/undo, memory search) and builds an ad-hoc signed `.app`.
 - **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
   HMAC-signed release manifest.
 
@@ -261,11 +263,13 @@ dt privacy forget --subject maya
 dt privacy forget --subject maya --hard
 dt privacy purge --older-than 30
 
-# Load smoke, coverage, release, container build.
+# Load smoke, coverage, release, container build, native shell.
 make load
 make coverage
 make release
 make docker
+make app          # dist/Daythread.app
+open dist/Daythread.app
 
 # Local dashboard.
 dt ui
@@ -329,7 +333,9 @@ CLI (dt) / HTTP API
   └─ errors.py           domain errors with stable HTTP codes
 ```
 
-Data lives in `$DAYTHREAD_HOME/daythread.db` (default `~/.daythread`).
+The native shell lives in `desktop/` (SwiftUI, macOS 13+). It calls `dt` from
+`PATH`; set `DAYTHREAD_BIN` to override. Data lives in
+`$DAYTHREAD_HOME/daythread.db` (default `~/.daythread`).
 Notes, drafts, sandbox files, backups, the API token, and the notification
 outbox live under the same home. Nothing leaves the machine unless you
 configure a remote model provider or MCP server.
@@ -409,6 +415,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   in the local page. Disable with `api.ui_enabled=0`.
 - **Release**: SHA256SUMS + SBOM; set `DAYTHREAD_RELEASE_KEY` to HMAC-sign the
   manifest.
+- **Native shell**: the SwiftUI app invokes the local `dt` CLI with the same
+  permissions; review commands before use and keep `dt` on a trusted path.
 - **MCP server**: read-only by default; write tools are hidden unless
   `--allow-write` is set; plans proposed by external agents require approval.
 - **Connector actions** are `external` by default: a run is created and must be

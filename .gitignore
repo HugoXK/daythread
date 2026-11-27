@@ -11,3 +11,5 @@ venv/
 .coverage
 htmlcov/
 .coverage.*
+desktop/.build/
+desktop/.swiftpm/

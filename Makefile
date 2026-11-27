@@ -1,4 +1,4 @@
-.PHONY: test ci coverage release bench load docker demo install clean
+.PHONY: test ci coverage release app bench load docker demo install clean
 
 test:
 	python3 -m unittest discover -s tests -v
@@ -14,6 +14,9 @@ coverage:
 
 release:
 	python3 scripts/release.py --build
+
+app:
+	./scripts/build_app.sh
 
 bench:
 	python3 -m daythread bench

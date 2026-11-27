@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0 — native macOS shell
+
+- SwiftUI macOS app (`desktop/`) driving the `dt` CLI: Today brief, run list
+  with approve/reject/undo, and memory search.
+- Builds and ad-hoc signs a `.app` bundle via `make app`.
+- `DAYTHREAD_BIN` and `DAYTHREAD_HOME` are inherited for dev/custom installs.
+- 221 unit tests; Swift shell verified with `swift build` and codesign.
+
 ## 0.15.0 — OS sandbox, release artifacts, and dashboard
 
 - macOS `sandbox-exec` backend for isolated tools: file-write allowlist and

@@ -86,6 +86,8 @@ The baseline is designed to preserve these invariants:
   with `api.ui_enabled=0` if that model is not acceptable.
 - Release manifests can be HMAC-signed with `DAYTHREAD_RELEASE_KEY`; unsigned
   releases are checksummed but not authenticated.
+- The macOS SwiftUI shell runs the local `dt` binary with the user's
+  permissions; it does not add its own sandbox.
 - MCP resources never expose `secret`/`health` facts.
 - Relay device tokens can expire; `ETag`/`If-Match` prevents silent overwrites
   when clients opt in.
