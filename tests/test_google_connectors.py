@@ -207,6 +207,7 @@ class GoogleConnectorTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             connectors.connect(self.conn, "google.calendar")
 
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_sync_requires_token(self):
         self.conn.execute(
             "INSERT INTO connectors(id, version, status, scopes, connected_at) VALUES('google.calendar', '1.0.0', 'connected', '[]', '2026-01-01')"
