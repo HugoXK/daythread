@@ -81,7 +81,8 @@ coverage, 75% gate), not feature breadth.
 - **Native shell**: `desktop/` is a SwiftUI macOS app that drives `dt` (Today,
   runs, approve/reject/undo, memory search) and builds an ad-hoc signed `.app`.
 - **Cross-platform shell**: `desktop-tauri/` is a Tauri v2 app (Rust command +
-  web UI) that drives the same `dt` CLI; `cargo build --release` verified.
+  web UI) that drives the same `dt` CLI; `cargo build --release` verified and
+  `make tauri-bundle` produces a `.app` + `.dmg`.
 - **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
   HMAC or Ed25519-signed release manifest with embedded public key.
 
@@ -278,6 +279,7 @@ python3 scripts/release.py --build --signing-key release.pem
 make docker
 make app          # SwiftUI dist/Daythread.app
 make tauri        # Tauri release build
+make tauri-bundle # Tauri .app + .dmg
 open dist/Daythread.app
 
 # Local dashboard.

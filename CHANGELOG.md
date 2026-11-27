@@ -6,6 +6,7 @@
 - `cargo build --release` verified; Rust toolchain installed from the rsproxy
   mirror.
 - Tauri app mirrors the SwiftUI shell: Today, runs, approve/reject/undo.
+- `make tauri-bundle` builds `Daythread.app` and `Daythread_0.21.0_aarch64.dmg`.
 - 233 unit tests.
 
 ## 0.20.0 — provider webhooks and signed SBOM

@@ -8,8 +8,16 @@ cd desktop-tauri/src-tauri
 cargo build
 ```
 
-For a bundled app, install the Tauri CLI and run `cargo tauri build` (or
-`npx @tauri-apps/cli build`). Set `DAYTHREAD_BIN` to override the `dt` binary.
+Bundle a `.app` and `.dmg`:
+
+```bash
+cd desktop-tauri
+PATH="$HOME/.cargo/bin:$PATH" npx --yes @tauri-apps/cli@2 build
+```
+
+This produces `src-tauri/target/release/bundle/macos/Daythread.app` and
+`bundle/dmg/Daythread_<version>_aarch64.dmg`. Set `DAYTHREAD_BIN` to override the
+`dt` binary.
 
 The macOS-native SwiftUI shell in `desktop/` is an alternative with no Rust
 toolchain requirement.
