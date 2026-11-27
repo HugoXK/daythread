@@ -20,6 +20,7 @@ from . import (
     backup,
     bench,
     brief,
+    compliance,
     connectors,
     export,
     maintenance,
@@ -324,6 +325,11 @@ def build_parser() -> argparse.ArgumentParser:
     privacy_purge = privacy_sub.add_parser("purge", help="hard-delete old tombstones")
     privacy_purge.add_argument("--older-than", type=int, default=30)
 
+    compliance_p = sub.add_parser("compliance", help="compliance evidence export")
+    compliance_sub = compliance_p.add_subparsers(dest="compliance_cmd", required=True)
+    compliance_export = compliance_sub.add_parser("evidence")
+    compliance_export.add_argument("--out", default=None)
+
     maint = sub.add_parser("maintenance", help="retention and database housekeeping")
     maint_sub = maint.add_subparsers(dest="maintenance_cmd", required=True)
     maint_sub.add_parser("stats", help="show database sizes and row counts")
@@ -601,6 +607,14 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
         _webhook(args, conn, home)
     elif cmd == "privacy":
         _privacy(args, conn)
+    elif cmd == "compliance":
+        out = (
+            Path(args.out).expanduser()
+            if args.out
+            else home / "compliance-evidence.json"
+        )
+        path = compliance.write_evidence(conn, home, out)
+        print("compliance evidence written to {}".format(path))
     elif cmd == "maintenance":
         if args.maintenance_cmd == "stats":
             data = maintenance.stats(conn)

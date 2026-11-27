@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.23.0 — attestations, evidence, and sidecar
+
+- Signed DSSE/in-toto SLSA-style attestation over release artifacts and SBOM.
+- `dt compliance evidence` exports controls, settings, stats, and known gaps.
+- Tauri sidecar build script (PyInstaller) and `make sidecar`.
+- Tag-triggered GitHub release workflow with optional Ed25519 signing.
+- Release/operations guide; 239 unit tests.
+
 ## 0.22.0 — polish and quality gates
 
 - Ruff lint config and CI lint step; `make lint` and `ci: lint test`.

@@ -86,7 +86,8 @@ The baseline is designed to preserve these invariants:
   with `api.ui_enabled=0` if that model is not acceptable.
 - Release manifests can be HMAC-signed with `DAYTHREAD_RELEASE_KEY` or
   Ed25519-signed with `--signing-key`; the public key is embedded for
-  verification. Unsigned releases are checksummed but not authenticated.
+  verification. DSSE/in-toto attestations cover artifact and SBOM digests.
+  Unsigned releases are checksummed but not authenticated.
 - `dt serve --certfile --keyfile` enables TLS; the relay supports the same.
 - `sandbox.backend=docker` runs isolated tools in a read-only container; the
   image must be trusted and is operator-supplied.

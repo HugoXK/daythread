@@ -1,4 +1,4 @@
-.PHONY: test ci lint coverage release app tauri tauri-bundle bench load docker demo install clean
+.PHONY: test ci lint coverage release attest app tauri tauri-bundle sidecar bench load docker demo install clean
 
 test:
 	python3 -m unittest discover -s tests -v
@@ -17,6 +17,12 @@ coverage:
 
 release:
 	python3 scripts/release.py --build
+
+attest:
+	python3 scripts/attest.py --dist dist --signing-key release.pem
+
+sidecar:
+	python3 scripts/build_sidecar.py
 
 app:
 	./scripts/build_app.sh

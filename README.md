@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.22.0 — polish and quality gates.** Interfaces may still change. The goal is
-a small, correct, auditable core with tests (233 at this milestone, ~78% line
-coverage, 75% gate), not feature breadth.
+**v0.23.0 — attestations, evidence, and sidecar.** Interfaces may still change.
+The goal is a small, correct, auditable core with tests (239 at this milestone,
+~78% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -83,8 +83,11 @@ coverage, 75% gate), not feature breadth.
 - **Cross-platform shell**: `desktop-tauri/` is a Tauri v2 app (Rust command +
   web UI) that drives the same `dt` CLI; `cargo build --release` verified and
   `make tauri-bundle` produces a `.app` + `.dmg`.
-- **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
-  HMAC or Ed25519-signed release manifest with embedded public key.
+- **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, HMAC/Ed25519
+  manifest, and a signed DSSE/in-toto attestation covering artifacts + SBOM.
+- **Compliance evidence**: `dt compliance evidence` exports controls, settings,
+  stats, and known gaps for audits.
+- **Sidecar**: `make sidecar` builds a standalone `dt` binary for Tauri.
 
 No telemetry. Network access only happens if you explicitly configure an
 OpenAI-compatible provider or an MCP server.
@@ -158,6 +161,7 @@ dt config show|set
 dt metrics | audit | export [--format md|json] [--include-sensitive]
 dt maintenance stats|prune [--older-than N] [--keep-runs N] [--vacuum]
 dt privacy export|forget|purge
+dt compliance evidence [--out FILE]
 dt fact list|search ... [--include-sensitive]
 dt backup [--out DIR] [--passphrase-env DAYTHREAD_BACKUP_PASSPHRASE]
 dt restore <file> [--verify] [--replace] [--trust] [--passphrase-env ...]
@@ -276,6 +280,8 @@ make coverage
 make release
 python3 scripts/release.py --generate-key release.pem
 python3 scripts/release.py --build --signing-key release.pem
+make attest
+make sidecar
 make docker
 make app          # SwiftUI dist/Daythread.app
 make tauri        # Tauri release build
@@ -434,7 +440,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **Dashboard**: loopback-only, CSP-protected, and embeds the bearer token only
   in the local page. Disable with `api.ui_enabled=0`.
 - **Release**: SHA256SUMS + SBOM; the manifest includes the SBOM SHA256 and is
-  HMAC- or Ed25519-signed (public key embedded).
+  HMAC- or Ed25519-signed. The DSSE/in-toto attestation is verifiable with
+  `scripts/attest.py --verify`.
 - **Native shells**: the SwiftUI and Tauri apps invoke the local `dt` CLI with
   the same permissions; review commands before use and keep `dt` on a trusted
   path.
@@ -477,6 +484,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 - [`docs/API.md`](docs/API.md) — HTTP API, webhooks, errors, pagination
 - [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) — data inventory, DSAR, retention,
   SOC 2-style mapping, incident response
+- [`docs/RELEASE.md`](docs/RELEASE.md) — signing, attestation, sidecar, CI
 
 ## Compliance
 
