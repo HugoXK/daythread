@@ -84,8 +84,14 @@ The baseline is designed to preserve these invariants:
   opaque provider identifiers; they are not treated as secrets but are local-only.
 - `dt ui` serves on loopback and embeds the bearer token in the page; disable it
   with `api.ui_enabled=0` if that model is not acceptable.
-- Release manifests can be HMAC-signed with `DAYTHREAD_RELEASE_KEY`; unsigned
-  releases are checksummed but not authenticated.
+- Release manifests can be HMAC-signed with `DAYTHREAD_RELEASE_KEY` or
+  Ed25519-signed with `--signing-key`; the public key is embedded for
+  verification. Unsigned releases are checksummed but not authenticated.
+- `dt serve --certfile --keyfile` enables TLS; the relay supports the same.
+- `sandbox.backend=docker` runs isolated tools in a read-only container; the
+  image must be trusted and is operator-supplied.
+- Relay conflicts can be resolved with `sync push --on-conflict pull`, which
+  merges remote data and retries once.
 - Untrusted runs (`taint=untrusted`) force approval for every write/external
   step. Encrypted backups use AES-GCM and require the passphrase to verify or
   restore.

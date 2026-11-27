@@ -266,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     ui_p = sub.add_parser("ui", help="open the local dashboard")
     ui_p.add_argument("--port", type=int, default=8765)
     ui_p.add_argument("--no-browser", action="store_true")
+    ui_p.add_argument("--certfile", default=None)
+    ui_p.add_argument("--keyfile", default=None)
 
     serve = sub.add_parser("serve", help="start the local HTTP API")
     serve.add_argument("--host", default="127.0.0.1")
@@ -389,6 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--passphrase-env", default="DAYTHREAD_PASSPHRASE")
     sync_pull.add_argument("--replace", action="store_true")
     sync_push.add_argument("--if-match", default=None)
+    sync_push.add_argument("--on-conflict", choices=("fail", "pull"), default="fail")
 
     webhook_p = sub.add_parser("webhook", help="signed webhook ingestion")
     webhook_sub = webhook_p.add_subparsers(dest="webhook_cmd", required=True)
@@ -430,6 +433,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve.add_argument("--print-token", action="store_true")
     serve.add_argument("--rotate-token", action="store_true")
+    serve.add_argument("--certfile", default=None)
+    serve.add_argument("--keyfile", default=None)
 
     return parser
 
@@ -1347,6 +1352,7 @@ def _sync(args: argparse.Namespace, conn, home: Path) -> None:
             _relay_token(args),
             remote_device=args.device,
             if_match=args.if_match,
+            on_conflict=args.on_conflict,
         )
         _print_json(result) if args.as_json else print(
             "pushed {} ({} bytes)".format(result["device_id"], result["size"])
@@ -1527,8 +1533,15 @@ def _relay_devices(args: argparse.Namespace, home: Path) -> None:
 
 
 def _ui(args: argparse.Namespace, home: Path, db_path: Path) -> None:
-    server = ApiServer(home, db_path, host="127.0.0.1", port=args.port)
-    url = "http://127.0.0.1:{}/ui".format(server.port)
+    server = ApiServer(
+        home,
+        db_path,
+        host="127.0.0.1",
+        port=args.port,
+        certfile=args.certfile,
+        keyfile=args.keyfile,
+    )
+    url = "{}://127.0.0.1:{}/ui".format(server.scheme, server.port)
     print("daythread UI on {}".format(url))
     if not args.no_browser:
         webbrowser.open(url)
@@ -1548,8 +1561,12 @@ def _serve(args: argparse.Namespace, home: Path, db_path: Path) -> None:
         host=args.host,
         port=args.port,
         rotate_token=args.rotate_token,
+        certfile=args.certfile,
+        keyfile=args.keyfile,
     )
-    print("daythread API on http://{}:{}".format(args.host, server.port))
+    print(
+        "daythread API on {}://{}:{}".format(server.scheme, args.host, server.port)
+    )
     print("token: {}".format(server.token))
     try:
         server.serve_forever()

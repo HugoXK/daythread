@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.18.0 — Ed25519 releases, HTTPS, Docker sandbox
+
+- Ed25519 release signing with `--generate-key` / `--signing-key`, embedded
+  public key, and verification helper.
+- HTTPS API/UI: `dt serve --certfile --keyfile` and `dt ui` TLS support.
+- Docker sandbox backend: `sandbox.backend=docker`, read-only container,
+  home mount, `--network none` for shell, configurable image/network.
+- Relay conflict handling: `dt sync push --on-conflict pull` pulls, merges, and
+  retries once on `409`.
+- 230 unit tests.
+
 ## 0.17.0 — taint approval, encrypted backups, observability
 
 - Schema v8: `runs.taint`; untrusted plans force approval for any non-read step.

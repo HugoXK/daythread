@@ -61,6 +61,46 @@ class RelayTest(unittest.TestCase):
         raw = (self.root / "relay" / "device-a.json").read_text(encoding="utf-8")
         self.assertNotIn("co-founder", raw)
 
+    def test_conflict_pull_and_retry(self):
+        memory.add_fact(self.conn_b, "person", "hugo", "role", "engineer")
+        sync.push(
+            self.conn_a,
+            self.home_a,
+            "pw",
+            self.server.url,
+            "relay-token",
+            remote_device="device-a",
+        )
+        with self.assertRaises(ProviderError):
+            sync.push(
+                self.conn_b,
+                self.home_b,
+                "pw",
+                self.server.url,
+                "relay-token",
+                remote_device="device-a",
+                if_match="wrong",
+            )
+        sync.push(
+            self.conn_b,
+            self.home_b,
+            "pw",
+            self.server.url,
+            "relay-token",
+            remote_device="device-a",
+            on_conflict="pull",
+        )
+        sync.pull(
+            self.conn_a,
+            self.home_a,
+            "pw",
+            self.server.url,
+            "relay-token",
+            remote_device="device-a",
+        )
+        subjects = {fact["subject_id"] for fact in memory.list_facts(self.conn_a)}
+        self.assertEqual(subjects, {"maya", "hugo"})
+
     def test_unauthorized(self):
         with self.assertRaises(ProviderError):
             sync.push(

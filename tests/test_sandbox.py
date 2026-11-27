@@ -39,6 +39,16 @@ class SandboxTest(unittest.TestCase):
         self.assertIn("deny network*", wrapped[2])
         self.assertIn(str(self.home.resolve()), wrapped[2])
 
+    def test_docker_wrap(self):
+        if not shutil.which("docker"):
+            self.skipTest("docker is not installed")
+        set_setting(self.conn, "sandbox.backend", "docker")
+        wrapped = sandbox.wrap(["echo", "hi"], self.conn, self.home, allow_network=False)
+        self.assertEqual(wrapped[0], shutil.which("docker"))
+        self.assertIn("--network", wrapped)
+        self.assertEqual(wrapped[wrapped.index("--network") + 1], "none")
+        self.assertTrue(any(str(self.home.resolve()) in part for part in wrapped))
+
     @unittest.skipUnless(HAS_SANDBOX, "sandbox-exec is not available")
     def test_shell_runs_in_sandbox(self):
         set_setting(self.conn, "sandbox.backend", "sandbox-exec")

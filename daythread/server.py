@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import sqlite3
+import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -59,17 +60,28 @@ class ApiServer:
         host: str = "127.0.0.1",
         port: int = 8765,
         rotate_token: bool = False,
+        certfile: Optional[str] = None,
+        keyfile: Optional[str] = None,
     ) -> None:
         self.home = Path(home)
         self.db_path = Path(db_path)
         self.token = ensure_token(self.home, rotate=rotate_token)
         handler = _make_handler(self.home, self.db_path, self.token)
         self.httpd = ThreadingHTTPServer((host, port), handler)
+        self.certfile = certfile
+        if certfile and keyfile:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=certfile, keyfile=keyfile)
+            self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
         self.thread: Optional[threading.Thread] = None
 
     @property
     def port(self) -> int:
         return int(self.httpd.server_address[1])
+
+    @property
+    def scheme(self) -> str:
+        return "https" if self.certfile else "http"
 
     def start(self) -> "ApiServer":
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)

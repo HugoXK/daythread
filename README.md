@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.17.0 — taint approval, encrypted backups, observability.** Interfaces may
-still change. The goal is a small, correct, auditable core with tests (226 at
-this milestone, ~78% line coverage, 75% gate), not feature breadth.
+**v0.18.0 — Ed25519 releases, HTTPS, Docker sandbox.** Interfaces may still
+change. The goal is a small, correct, auditable core with tests (230 at this
+milestone, ~78% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -67,7 +67,7 @@ this milestone, ~78% line coverage, 75% gate), not feature breadth.
   Prometheus metrics. Binds `127.0.0.1` only.
 - **Hardening**: atomic run leases, step timeouts, subprocess isolation for
   external/MCP/connector/shell tools with process-group kill, optional macOS
-  `sandbox-exec` file-write/network sandbox, retention/pruning, signed backups,
+  `sandbox-exec` or Docker sandbox, retention/pruning, signed/encrypted backups,
   encrypted model cache, sensitivity filters, MCP command allowlist, OAuth
   revoke/scope checks, relay TLS/retention/device tokens.
 - **Operations**: schema migrations, `doctor`, structured audit log, metrics,
@@ -80,7 +80,7 @@ this milestone, ~78% line coverage, 75% gate), not feature breadth.
 - **Native shell**: `desktop/` is a SwiftUI macOS app that drives `dt` (Today,
   runs, approve/reject/undo, memory search) and builds an ad-hoc signed `.app`.
 - **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
-  HMAC-signed release manifest.
+  HMAC or Ed25519-signed release manifest with embedded public key.
 
 No telemetry. Network access only happens if you explicitly configure an
 OpenAI-compatible provider or an MCP server.
@@ -144,7 +144,7 @@ dt skill list|show|install|run|uninstall
 
 dt secret set <name> | list | rm
 dt sync export|import|verify|push|pull|devices [--passphrase-env DAYTHREAD_PASSPHRASE]
-dt sync push ... [--if-match ETAG]
+dt sync push ... [--if-match ETAG] [--on-conflict fail|pull]
 dt relay serve [--dir DIR] [--port 8788] [--token-env DAYTHREAD_RELAY_TOKEN]
 dt relay devices add|list|remove [--file PATH]
 dt bench [--facts N] [--runs N]
@@ -158,6 +158,7 @@ dt fact list|search ... [--include-sensitive]
 dt backup [--out DIR] [--passphrase-env DAYTHREAD_BACKUP_PASSPHRASE]
 dt restore <file> [--verify] [--replace] [--trust] [--passphrase-env ...]
 dt serve [--host 127.0.0.1] [--port 8765] [--print-token] [--rotate-token]
+         [--certfile cert.pem --keyfile key.pem]
 ```
 
 ### Examples
@@ -269,6 +270,8 @@ dt privacy purge --older-than 30
 make load
 make coverage
 make release
+python3 scripts/release.py --generate-key release.pem
+python3 scripts/release.py --build --signing-key release.pem
 make docker
 make app          # dist/Daythread.app
 open dist/Daythread.app
@@ -290,9 +293,10 @@ DAYTHREAD_RELAY_TOKEN=... dt sync devices --relay http://127.0.0.1:8788
 # Benchmark the local core.
 dt bench --facts 500 --runs 50
 
-# Local API.
+# Local API (optionally HTTPS).
 dt serve --print-token
 dt serve --port 8765
+dt serve --certfile cert.pem --keyfile key.pem
 ```
 
 Register this loopback redirect URI in the Google Cloud console for the client:
@@ -416,10 +420,12 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   be read by URI.
 - **OS sandbox**: `sandbox.backend=sandbox-exec` restricts file writes to the
   Daythread home/temp and denies network for `shell.run` (macOS).
+  `sandbox.backend=docker` runs isolated tools in a read-only container with a
+  home mount and configurable network.
 - **Dashboard**: loopback-only, CSP-protected, and embeds the bearer token only
   in the local page. Disable with `api.ui_enabled=0`.
-- **Release**: SHA256SUMS + SBOM; set `DAYTHREAD_RELEASE_KEY` to HMAC-sign the
-  manifest.
+- **Release**: SHA256SUMS + SBOM; HMAC with `DAYTHREAD_RELEASE_KEY` or Ed25519
+  with `--signing-key` (public key embedded in the manifest).
 - **Native shell**: the SwiftUI app invokes the local `dt` CLI with the same
   permissions; review commands before use and keep `dt` on a trusted path.
 - **MCP server**: read-only by default; write tools are hidden unless

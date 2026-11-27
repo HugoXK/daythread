@@ -2,7 +2,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.release import build_manifest, build_sbom, verify_manifest, write_release
+from scripts.release import (
+    HAVE_ED25519,
+    build_manifest,
+    build_sbom,
+    generate_signing_key,
+    sign_manifest_ed25519,
+    verify_manifest,
+    verify_manifest_ed25519,
+    write_release,
+)
 
 
 class ReleaseTest(unittest.TestCase):
@@ -20,6 +29,19 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(len(manifest["files"]), 2)
             self.assertTrue(verify_manifest(manifest, "release-key"))
             self.assertFalse(verify_manifest(manifest, "wrong"))
+
+    @unittest.skipUnless(HAVE_ED25519, "cryptography is not installed")
+    def test_ed25519_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp)
+            (dist / "daythread-1.2.3.whl").write_bytes(b"wheel")
+            key_path = generate_signing_key(dist / "release.pem")
+            manifest = build_manifest(dist, "1.2.3", "abc123")
+            signed = sign_manifest_ed25519(manifest, key_path)
+            self.assertEqual(signed["signature_alg"], "ed25519")
+            self.assertTrue(verify_manifest_ed25519(signed))
+            signed["files"][0]["size"] = 999
+            self.assertFalse(verify_manifest_ed25519(signed))
 
     def test_write_release(self):
         with tempfile.TemporaryDirectory() as tmp:

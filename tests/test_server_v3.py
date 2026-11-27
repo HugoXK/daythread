@@ -1,9 +1,14 @@
+import ipaddress
 import json
+import ssl
 import tempfile
 import unittest
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from daythread import crypto
 
 from daythread.db import connect, init_db, set_setting
 from daythread.server import ApiServer
@@ -158,6 +163,60 @@ class ServerV3Test(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 429)
         finally:
             second.stop()
+
+    @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
+    def test_https_server(self):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=1))
+            .not_valid_after(datetime.now(timezone.utc) + timedelta(days=1))
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [
+                        x509.DNSName("localhost"),
+                        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                    ]
+                ),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+        key_path = self.home / "key.pem"
+        cert_path = self.home / "cert.pem"
+        key_path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        server = ApiServer(
+            self.home,
+            self.db_path,
+            port=0,
+            certfile=str(cert_path),
+            keyfile=str(key_path),
+        ).start()
+        try:
+            self.assertEqual(server.scheme, "https")
+            context = ssl._create_unverified_context()
+            url = "https://127.0.0.1:{}/v1/health".format(server.port)
+            with urllib.request.urlopen(url, context=context, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            server.stop()
 
     def test_ui_page(self):
         status, body, headers = self.request_raw("GET", "/ui")

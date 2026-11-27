@@ -27,6 +27,8 @@ def wrap(
         return command
     if selected == "sandbox-exec":
         return _sandbox_exec(command, Path(home), allow_network)
+    if selected == "docker":
+        return _docker(command, conn, Path(home), allow_network)
     raise ValidationError("unknown sandbox backend: {}".format(selected))
 
 
@@ -59,3 +61,42 @@ def _sandbox_exec(
         ]
     )
     return [executable, "-p", "\n".join(lines)] + list(command)
+
+
+def _docker(
+    command: List[str],
+    conn,
+    home: Path,
+    allow_network: bool,
+) -> List[str]:
+    executable = shutil.which("docker")
+    if not executable:
+        raise ValidationError("docker is not installed")
+    home = Path(home).resolve()
+    image = str(get_setting(conn, "sandbox.docker_image", "daythread:latest"))
+    default_network = "bridge" if allow_network else "none"
+    network = str(
+        get_setting(conn, "sandbox.docker_network", default_network) or default_network
+    )
+    package_root = Path(__file__).resolve().parent.parent
+    return [
+        executable,
+        "run",
+        "--rm",
+        "--network",
+        network,
+        "--read-only",
+        "--tmpfs",
+        "/tmp",
+        "-v",
+        "{}:{}".format(home, home),
+        "-v",
+        "{}:{}:ro".format(package_root, package_root),
+        "-w",
+        str(package_root),
+        "-e",
+        "DAYTHREAD_HOME={}".format(home),
+        "-e",
+        "PYTHONDONTWRITEBYTECODE=1",
+        image,
+    ] + list(command)

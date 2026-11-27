@@ -13,3 +13,5 @@ htmlcov/
 .coverage.*
 desktop/.build/
 desktop/.swiftpm/
+release.pem
+*.key.pem

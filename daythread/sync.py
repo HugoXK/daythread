@@ -130,16 +130,34 @@ def push(
     relay_token: str,
     remote_device: Optional[str] = None,
     if_match: Optional[str] = None,
+    on_conflict: str = "fail",
 ) -> Dict[str, Any]:
+    if on_conflict not in ("fail", "pull"):
+        raise ValueError("on_conflict must be fail or pull")
     target = remote_device or device_id(conn)
     bundle = build_bundle(conn, passphrase)
-    result = _relay_request(
-        "PUT",
-        "{}/v1/bundles/{}".format(relay_url.rstrip("/"), quote(target, safe="")),
-        relay_token,
-        payload=bundle,
-        headers={"If-Match": if_match} if if_match else None,
-    )
+    url = "{}/v1/bundles/{}".format(relay_url.rstrip("/"), quote(target, safe=""))
+    headers = {"If-Match": if_match} if if_match else None
+    try:
+        result = _relay_request(
+            "PUT", url, relay_token, payload=bundle, headers=headers
+        )
+    except ProviderError as exc:
+        if on_conflict != "pull" or "409" not in str(exc):
+            raise
+        pull(
+            conn,
+            home,
+            passphrase,
+            relay_url,
+            relay_token,
+            remote_device=target,
+            replace=False,
+        )
+        bundle = build_bundle(conn, passphrase)
+        result = _relay_request(
+            "PUT", url, relay_token, payload=bundle, headers=None
+        )
     obs.audit(conn, "sync.pushed", actor="user", target=target)
     return result
 
