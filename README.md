@@ -15,8 +15,8 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.10.0 — subprocess isolation and coverage gate.** Interfaces may still
-change. The goal is a small, correct, auditable core with tests (192 at this
+**v0.11.0 — model streaming, retries, and egress policy.** Interfaces may still
+change. The goal is a small, correct, auditable core with tests (197 at this
 milestone, ~77% line coverage, 75% gate), not feature breadth.
 
 ## What works today
@@ -35,8 +35,9 @@ milestone, ~77% line coverage, 75% gate), not feature breadth.
 - **Scheduler**: idempotent morning/evening/maintenance ticks, notification
   outbox, quiet-hour queueing, and a daemon loop.
 - **Model gateway**: pluggable providers, local deterministic provider,
-  OpenAI-compatible HTTP provider, fallback chain, response cache, daily token
-  budget, and usage ledger.
+  OpenAI-compatible HTTP + SSE streaming, fallback chain with retries/backoff,
+  `local_only` egress policy, encrypted response cache, daily token budget, and
+  usage ledger.
 - **MCP client**: JSON-RPC 2.0 stdio client, server registry, tool discovery,
   and `mcp.call` behind the approval gate.
 - **MCP server**: `dt mcp serve` exposes briefs, memory, tasks, calendar,
@@ -116,7 +117,7 @@ dt act <tool> --arg k=v [--idempotency-key K]
 dt runs | show | approve | reject | undo | resume | cancel | ledger
 dt policy show|set
 
-dt ask "<text>" [--task NAME] [--no-cache]
+dt ask "<text>" [--task NAME] [--no-cache] [--stream]
 dt model list|usage
 
 dt mcp add|list|remove|tools|call|serve
@@ -169,6 +170,8 @@ dt undo <run-id>
 
 # Model gateway (local by default; configure a remote provider explicitly).
 dt ask "summarize my day"
+dt ask --stream "summarize my day"
+dt config set model.egress local_only   # forbid remote providers
 dt config set model.provider openai.compatible
 dt config set model.model gpt-4o-mini
 export OPENAI_API_KEY=...
@@ -360,6 +363,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **OAuth**: authorization-code + PKCE, `state` validation, loopback-only
   callback, encrypted tokens, and refresh-on-expiry. Client secrets come from
   `env:` or `secret:` references, never the command line.
+- **Model egress**: `model.egress=local_only` rejects non-local providers;
+  retries use bounded exponential backoff; streaming is opt-in.
 - **MCP server**: read-only by default; write tools are hidden unless
   `--allow-write` is set; plans proposed by external agents require approval.
 - **Connector actions** are `external` by default: a run is created and must be

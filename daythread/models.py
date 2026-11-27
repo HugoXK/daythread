@@ -30,6 +30,9 @@ DEFAULTS = {
     "model.base_url": "https://api.openai.com/v1",
     "model.api_key_ref": "OPENAI_API_KEY",
     "model.timeout_seconds": "30",
+    "model.retry_attempts": "2",
+    "model.retry_backoff": "0.2",
+    "model.egress": "allow",
 }
 
 
@@ -58,6 +61,7 @@ class ModelResponse:
 
 class EchoProvider:
     name = "local.echo"
+    local = True
 
     def complete(
         self,
@@ -77,9 +81,15 @@ class EchoProvider:
             raw={"local": True},
         )
 
+    def stream(self, model, messages, temperature, max_tokens):
+        text = "echo: {}".format(messages[-1]["content"] if messages else "")
+        for word in text.split(" "):
+            yield word + " "
+
 
 class OpenAICompatibleProvider:
     name = "openai.compatible"
+    local = False
 
     def __init__(
         self,
@@ -143,6 +153,40 @@ class OpenAICompatibleProvider:
             raw=data,
         )
 
+    def stream(self, model, messages, temperature, max_tokens):
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        request = urllib.request.Request(
+            "{}/chat/completions".format(self.base_url),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer {}".format(self.api_key),
+                "User-Agent": "daythread/{}".format(__version__),
+            },
+            method="POST",
+        )
+        try:
+            if self.opener is not None:
+                raw = self.opener(request)
+                if hasattr(raw, "read"):
+                    raw = raw.read()
+                text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                for line in text.splitlines():
+                    yield from _sse_chunks(line)
+            else:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    for line in response:
+                        decoded = line.decode("utf-8", "replace").strip()
+                        yield from _sse_chunks(decoded)
+        except Exception as exc:  # noqa: BLE001 - normalized provider error
+            raise ProviderError("provider stream failed: {}".format(exc))
+
 
 class ModelGateway:
     def __init__(
@@ -170,6 +214,9 @@ class ModelGateway:
             "base_url": _setting(self.conn, "model.base_url"),
             "api_key_ref": _setting(self.conn, "model.api_key_ref"),
             "timeout_seconds": float(_setting(self.conn, "model.timeout_seconds")),
+            "retry_attempts": int(_setting(self.conn, "model.retry_attempts")),
+            "retry_backoff": float(_setting(self.conn, "model.retry_backoff")),
+            "egress": _setting(self.conn, "model.egress"),
         }
 
     def chat(
@@ -205,36 +252,124 @@ class ModelGateway:
         if config["fallback"] and config["fallback"] not in chain:
             chain.append(config["fallback"])
         errors: List[str] = []
+        attempts = max(1, int(config["retry_attempts"]))
         for provider_name in chain:
             try:
                 provider = self._provider(provider_name, config)
-                started = time.monotonic()
-                response = provider.complete(
-                    config["model"],
-                    normalized,
-                    config["temperature"],
-                    int(max_tokens or config["max_tokens"]),
-                )
-                response.latency_ms = (time.monotonic() - started) * 1000.0
-                self._record_usage(response, task, ok=True, cached=False)
-                if use_cache:
-                    self._set_cache(cache_key, response, config["cache_ttl_hours"])
-                obs.incr(self.conn, "model.calls")
-                obs.incr(self.conn, "model.tokens", response.prompt_tokens + response.completion_tokens)
-                obs.audit(
-                    self.conn,
-                    "model.completed",
-                    actor="agent",
-                    target=provider_name,
-                    detail={
-                        "model": response.model,
-                        "task": task,
-                        "prompt_tokens": response.prompt_tokens,
-                        "completion_tokens": response.completion_tokens,
-                    },
-                )
-                return response
+                _enforce_egress(provider_name, provider, config)
+                for attempt in range(attempts):
+                    try:
+                        started = time.monotonic()
+                        response = provider.complete(
+                            config["model"],
+                            normalized,
+                            config["temperature"],
+                            int(max_tokens or config["max_tokens"]),
+                        )
+                        response.latency_ms = (time.monotonic() - started) * 1000.0
+                        self._record_usage(response, task, ok=True, cached=False)
+                        if use_cache:
+                            self._set_cache(cache_key, response, config["cache_ttl_hours"])
+                        obs.incr(self.conn, "model.calls")
+                        obs.incr(self.conn, "model.tokens", response.prompt_tokens + response.completion_tokens)
+                        obs.audit(
+                            self.conn,
+                            "model.completed",
+                            actor="agent",
+                            target=provider_name,
+                            detail={
+                                "model": response.model,
+                                "task": task,
+                                "prompt_tokens": response.prompt_tokens,
+                                "completion_tokens": response.completion_tokens,
+                            },
+                        )
+                        return response
+                    except Exception as exc:  # noqa: BLE001 - retry/fallback
+                        if attempt + 1 < attempts:
+                            obs.incr(self.conn, "model.retries")
+                            time.sleep(config["retry_backoff"] * (2 ** attempt))
+                            continue
+                        raise
             except Exception as exc:  # noqa: BLE001 - try fallbacks
+                errors.append("{}: {}".format(provider_name, exc))
+                self._record_failure(provider_name, config["model"], task, str(exc))
+                obs.incr(self.conn, "model.errors")
+        raise ProviderError("all model providers failed: {}".format("; ".join(errors)))
+
+    def stream(
+        self,
+        messages: List[Dict[str, str]],
+        task: str = "chat",
+        max_tokens: Optional[int] = None,
+    ):
+        normalized = _validate_messages(messages)
+        config = self.config()
+        input_chars = sum(len(item["content"]) for item in normalized)
+        if input_chars > config["max_input_chars"]:
+            raise ValidationError(
+                "input is too large ({} > {} chars)".format(
+                    input_chars, config["max_input_chars"]
+                )
+            )
+        budget = config["daily_token_budget"]
+        used = self.usage_today()
+        if budget > 0 and used >= budget:
+            raise BudgetExceededError(
+                "daily token budget exhausted ({}/{}); raise model.daily_token_budget".format(
+                    used, budget
+                )
+            )
+        chain = [config["provider"]]
+        if config["fallback"] and config["fallback"] not in chain:
+            chain.append(config["fallback"])
+        errors: List[str] = []
+        for provider_name in chain:
+            yielded = False
+            try:
+                provider = self._provider(provider_name, config)
+                _enforce_egress(provider_name, provider, config)
+                collected: List[str] = []
+                if hasattr(provider, "stream"):
+                    iterator = provider.stream(
+                        config["model"],
+                        normalized,
+                        config["temperature"],
+                        int(max_tokens or config["max_tokens"]),
+                    )
+                else:
+                    iterator = iter(
+                        [
+                            provider.complete(
+                                config["model"],
+                                normalized,
+                                config["temperature"],
+                                int(max_tokens or config["max_tokens"]),
+                            ).text
+                        ]
+                    )
+                started = time.monotonic()
+                for chunk in iterator:
+                    yielded = True
+                    collected.append(chunk)
+                    yield chunk
+                text = "".join(collected)
+                response = ModelResponse(
+                    text=text,
+                    provider=getattr(provider, "name", provider_name),
+                    model=config["model"],
+                    prompt_tokens=_estimate_tokens(json.dumps(normalized)),
+                    completion_tokens=_estimate_tokens(text),
+                    latency_ms=(time.monotonic() - started) * 1000.0,
+                )
+                self._record_usage(response, task, ok=True, cached=False)
+                obs.incr(self.conn, "model.calls")
+                obs.incr(self.conn, "model.streams")
+                obs.incr(self.conn, "model.tokens", response.prompt_tokens + response.completion_tokens)
+                return
+            except Exception as exc:  # noqa: BLE001
+                if yielded:
+                    raise ProviderError("model stream failed: {}".format(exc))
                 errors.append("{}: {}".format(provider_name, exc))
                 self._record_failure(provider_name, config["model"], task, str(exc))
                 obs.incr(self.conn, "model.errors")
@@ -389,6 +524,16 @@ def ask(
     return gateway.chat([{"role": "user", "content": text}], task=task, use_cache=use_cache)
 
 
+def ask_stream(
+    conn,
+    text: str,
+    task: str = "chat",
+    home: Optional[Path] = None,
+):
+    gateway = ModelGateway(conn, home=home)
+    return gateway.stream([{"role": "user", "content": text}], task=task)
+
+
 def _setting(conn, key: str) -> str:
     return str(get_setting(conn, key, DEFAULTS[key]))
 
@@ -408,6 +553,32 @@ def _validate_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
             raise ValidationError("message content must be a string")
         normalized.append({"role": role, "content": content})
     return normalized
+
+
+def _enforce_egress(provider_name: str, provider, config: Dict[str, Any]) -> None:
+    if config.get("egress") == "local_only" and not getattr(provider, "local", False):
+        raise ProviderError(
+            "egress policy local_only blocks provider {}".format(provider_name)
+        )
+
+
+def _sse_chunks(line: str):
+    if not line.startswith("data:"):
+        return
+    data = line[len("data:"):].strip()
+    if not data or data == "[DONE]":
+        return
+    try:
+        payload = json.loads(data)
+    except ValueError:
+        return
+    choices = payload.get("choices") or []
+    if not choices:
+        return
+    delta = choices[0].get("delta") or {}
+    content = delta.get("content")
+    if content:
+        yield str(content)
 
 
 def _cache_key(

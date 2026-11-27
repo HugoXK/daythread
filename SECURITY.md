@@ -75,6 +75,8 @@ The baseline is designed to preserve these invariants:
 - Privacy: subject export includes sensitive facts/history; soft forget
   tombstones; hard forget removes facts, history, and matching events; tombstone
   purge is explicit.
+- Model egress: `model.egress=local_only` blocks remote providers; retries are
+  bounded; streaming does not bypass the daily token budget.
 - Relay device tokens can expire; `ETag`/`If-Match` prevents silent overwrites
   when clients opt in.
 - No credentials or telemetry are collected.

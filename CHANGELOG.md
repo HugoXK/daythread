@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0 — model streaming, retries, and egress policy
+
+- Model gateway: retry with exponential backoff, fallback chain, and usage
+  accounting.
+- Streaming: Echo and OpenAI-compatible SSE streams; `dt ask --stream`.
+- Egress policy: `model.egress=local_only` blocks non-local providers.
+- Tests for SSE parsing, retries, egress, and CLI streaming.
+- 197 unit tests.
+
 ## 0.10.0 — subprocess isolation and coverage gate
 
 - Isolated tool runner (`daythread.tool_runner`): external, connector, MCP, and

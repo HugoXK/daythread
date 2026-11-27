@@ -262,6 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("text")
     ask.add_argument("--task", default="chat")
     ask.add_argument("--no-cache", action="store_true")
+    ask.add_argument("--stream", action="store_true")
 
     model = sub.add_parser("model", help="model gateway configuration and usage")
     model_sub = model.add_subparsers(dest="model_cmd", required=True)
@@ -516,17 +517,25 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
     elif cmd == "export":
         _export(args, conn)
     elif cmd == "ask":
-        response = models.ask(
-            conn,
-            args.text,
-            task=args.task,
-            use_cache=not args.no_cache,
-            home=home,
-        )
-        if args.as_json:
-            _print_json(response.to_dict())
+        if args.stream:
+            for chunk in models.ask_stream(
+                conn, args.text, task=args.task, home=home
+            ):
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+            print()
         else:
-            print(response.text)
+            response = models.ask(
+                conn,
+                args.text,
+                task=args.task,
+                use_cache=not args.no_cache,
+                home=home,
+            )
+            if args.as_json:
+                _print_json(response.to_dict())
+            else:
+                print(response.text)
     elif cmd == "model":
         _model(args, conn)
     elif cmd == "mcp":

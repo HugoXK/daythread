@@ -40,6 +40,11 @@ class CliV3Test(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("local.echo", out)
 
+    def test_ask_stream_cli(self):
+        code, out, _ = run_cli(["--home", self.home, "ask", "--stream", "hello"])
+        self.assertEqual(code, 0)
+        self.assertIn("echo:", out)
+
     def test_mcp_cli(self):
         command = "{} {}".format(shlex.quote(sys.executable), shlex.quote(str(FIXTURE)))
         code, out, _ = run_cli(

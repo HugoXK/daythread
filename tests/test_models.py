@@ -10,9 +10,32 @@ from daythread.errors import BudgetExceededError, ProviderError, ValidationError
 
 class FailingProvider:
     name = "test.fail"
+    local = True
 
     def complete(self, model, messages, temperature, max_tokens):
         raise RuntimeError("boom")
+
+
+class FlakyProvider:
+    name = "test.flaky"
+    local = True
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, model, messages, temperature, max_tokens):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("transient")
+        return models.ModelResponse("recovered", self.name, model)
+
+
+class RemoteProvider:
+    name = "test.remote"
+    local = False
+
+    def complete(self, model, messages, temperature, max_tokens):
+        return models.ModelResponse("remote", self.name, model)
 
 
 class ModelsTest(unittest.TestCase):
@@ -92,6 +115,42 @@ class ModelsTest(unittest.TestCase):
             gateway.chat([{"role": "user", "content": "x"}])
         rows = self.conn.execute("SELECT ok FROM model_usage").fetchall()
         self.assertEqual([row["ok"] for row in rows], [0])
+
+    def test_stream_echo(self):
+        gateway = models.ModelGateway(self.conn)
+        chunks = list(gateway.stream([{"role": "user", "content": "hello stream"}]))
+        self.assertIn("echo:", "".join(chunks))
+
+    def test_openai_sse_stream(self):
+        def opener(request):
+            return (
+                b'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+                b"data: [DONE]\n\n"
+            )
+
+        provider = models.OpenAICompatibleProvider(
+            "https://example.invalid/v1", "key", opener=opener
+        )
+        chunks = list(provider.stream("m", [{"role": "user", "content": "x"}], 0, 16))
+        self.assertEqual("".join(chunks), "hello")
+
+    def test_retry(self):
+        set_setting(self.conn, "model.provider", "test.flaky")
+        set_setting(self.conn, "model.retry_attempts", "2")
+        set_setting(self.conn, "model.retry_backoff", "0")
+        provider = FlakyProvider()
+        gateway = models.ModelGateway(self.conn, {"test.flaky": provider})
+        response = gateway.chat([{"role": "user", "content": "x"}])
+        self.assertEqual(response.text, "recovered")
+        self.assertEqual(provider.calls, 2)
+
+    def test_egress_local_only(self):
+        set_setting(self.conn, "model.provider", "test.remote")
+        set_setting(self.conn, "model.egress", "local_only")
+        gateway = models.ModelGateway(self.conn, {"test.remote": RemoteProvider()})
+        with self.assertRaises(ProviderError):
+            gateway.chat([{"role": "user", "content": "x"}])
 
     def test_list_models(self):
         data = models.list_models(self.conn)
