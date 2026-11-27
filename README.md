@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.11.0 — model streaming, retries, and egress policy.** Interfaces may still
-change. The goal is a small, correct, auditable core with tests (197 at this
-milestone, ~77% line coverage, 75% gate), not feature breadth.
+**v0.12.0 — Feishu and Lark connectors.** Interfaces may still change. The goal
+is a small, correct, auditable core with tests (204 at this milestone, ~78% line
+coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -45,9 +45,9 @@ milestone, ~77% line coverage, 75% gate), not feature breadth.
   Read-only by default.
 - **Connectors**: manifest-based registry, mock providers, **OAuth2 + PKCE**
   with a loopback callback, encrypted token storage and refresh, Google and
-  Microsoft 365 Calendar/Mail adapters, read sync with retry/backoff and
-  pagination, and approval-gated write actions (create/move events,
-  draft/send mail).
+  Microsoft 365 Calendar/Mail adapters, Feishu/Lark Calendar and Tasks
+  adapters, read sync with retry/backoff and pagination, and approval-gated
+  write actions (create/move events, draft/send mail, create tasks).
 - **Skills**: declarative plans with explicit capabilities, builtin skills,
   install/uninstall, and validation.
 - **Backup/restore**: checksummed versioned bundles, secret redaction, verify,
@@ -222,6 +222,13 @@ dt connector sync microsoft.calendar
 dt connector call microsoft.mail create_draft \
   --arg to=maya@example.com --arg subject=Deck --arg body="Latest version."
 
+# Feishu / Lark.
+dt config set oauth.feishu.client_id "<app-id>"
+dt config set oauth.feishu.client_secret_ref "env:FEISHU_APP_SECRET"
+dt connector auth feishu.calendar --no-browser
+dt connector sync feishu.tasks
+dt connector call feishu.tasks create_task --arg title="Review deck" --arg due=2026-11-27T10:00:00Z
+
 # Backup and restore (signed with the device master key).
 dt backup
 dt restore ~/.daythread/backups/daythread-*.json --verify
@@ -362,7 +369,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   from sync by design.
 - **OAuth**: authorization-code + PKCE, `state` validation, loopback-only
   callback, encrypted tokens, and refresh-on-expiry. Client secrets come from
-  `env:` or `secret:` references, never the command line.
+  `env:` or `secret:` references, never the command line. Google, Microsoft 365,
+  Feishu, and Lark are supported.
 - **Model egress**: `model.egress=local_only` rejects non-local providers;
   retries use bounded exponential backoff; streaming is opt-in.
 - **MCP server**: read-only by default; write tools are hidden unless
@@ -391,7 +399,7 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 
 ## Roadmap
 
-1. Feishu/Lark and more OAuth providers.
+1. More OAuth providers and webhook/incremental sync.
 2. Rust daemon + Tauri desktop shell, ported from this reference.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.

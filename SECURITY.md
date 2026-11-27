@@ -47,8 +47,9 @@ The baseline is designed to preserve these invariants:
   the device. E2EE sync bundles are authenticated with AES-GCM and exclude
   device-local secrets.
 - OAuth uses authorization-code + PKCE with `state` validation, a loopback-only
-  callback, read-only Google scopes, and AES-GCM encrypted tokens. Client
-  secrets are referenced via `env:` or `secret:`, not stored in plaintext.
+  callback, least-privilege read/write scopes, and AES-GCM encrypted tokens for
+  Google, Microsoft 365, Feishu, and Lark. Client secrets are referenced via
+  `env:` or `secret:`, not stored in plaintext.
 - The MCP server is read-only by default; write tools require `--allow-write`,
   and plan proposals from external agents require human approval.
 - Connector write actions are `external` by default, run only after approval,

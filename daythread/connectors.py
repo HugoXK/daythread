@@ -345,6 +345,151 @@ def _raw_email(args: Dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
 
+
+def _iso_from_feishu(value):
+    if value is None:
+        return None
+    try:
+        number = float(value)
+        if number > 1e12:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return str(value)
+
+
+def _unix_from_value(value) -> str:
+    if value is None:
+        return str(int(datetime.now(timezone.utc).timestamp()))
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        pass
+    try:
+        return str(int(datetime.fromisoformat(str(value)).timestamp()))
+    except ValueError:
+        return str(int(datetime.now(timezone.utc).timestamp()))
+
+
+def _feishu_calendar_sync(base: str):
+    def sync(now, token, opener=None):
+        primary = _http_json(
+            "{}/open-apis/calendar/v4/calendars/primary".format(base), token, opener
+        )
+        data = primary.get("data") or {}
+        calendar = data.get("calendar") or data
+        calendar_id = (
+            calendar.get("calendar_id")
+            or data.get("calendar_id")
+            or "primary"
+        )
+        start = int((now - timedelta(days=1)).timestamp())
+        end = int((now + timedelta(days=7)).timestamp())
+        url = (
+            "{}/open-apis/calendar/v4/calendars/{}/events"
+            "?start_time={}&end_time={}&page_size=50".format(
+                base, quote(str(calendar_id), safe=""), start, end
+            )
+        )
+        payload = _http_json(url, token, opener)
+        items = (payload.get("data") or {}).get("items") or []
+        result = []
+        for event in items:
+            result.append(
+                {
+                    "kind": "calendar",
+                    "external_id": str(event.get("event_id", "")),
+                    "payload": {
+                        "title": event.get("summary") or "(untitled)",
+                        "start": _iso_from_feishu(event.get("start_time")),
+                        "end": _iso_from_feishu(event.get("end_time")),
+                    },
+                }
+            )
+        return result
+
+    return sync
+
+
+def _feishu_task_sync(base: str):
+    def sync(now, token, opener=None):
+        payload = _http_json(
+            "{}/open-apis/task/v2/tasks?page_size=50".format(base), token, opener
+        )
+        items = (payload.get("data") or {}).get("items") or []
+        result = []
+        for task in items:
+            due = task.get("due") or {}
+            due_ts = due.get("timestamp") if isinstance(due, dict) else None
+            result.append(
+                {
+                    "kind": "task",
+                    "external_id": str(task.get("guid", "")),
+                    "payload": {
+                        "title": task.get("summary") or "(untitled)",
+                        "status": "done" if task.get("completed_at") else "open",
+                        "due": _iso_from_feishu(due_ts),
+                    },
+                }
+            )
+        return result
+
+    return sync
+
+
+def _feishu_calendar_create(base: str):
+    def action(conn, home, token, args, opener=None):
+        title = str(args.get("title", "")).strip()
+        start = args.get("start")
+        if not title or not start:
+            raise ValidationError("title and start are required")
+        calendar_id = str(args.get("calendar_id", "primary"))
+        body = {
+            "summary": title,
+            "start_time": {
+                "timestamp": _unix_from_value(start),
+                "timezone": str(args.get("timezone", "UTC")),
+            },
+            "end_time": {
+                "timestamp": _unix_from_value(args.get("end", start)),
+                "timezone": str(args.get("timezone", "UTC")),
+            },
+        }
+        return _http_json(
+            "{}/open-apis/calendar/v4/calendars/{}/events".format(
+                base, quote(calendar_id, safe="")
+            ),
+            token,
+            opener,
+            method="POST",
+            body=body,
+        )
+
+    return action
+
+
+def _feishu_task_create(base: str):
+    def action(conn, home, token, args, opener=None):
+        title = str(args.get("title", "")).strip()
+        if not title:
+            raise ValidationError("title is required")
+        body = {"summary": title}
+        if args.get("due"):
+            body["due"] = {
+                "timestamp": _unix_from_value(args["due"]),
+                "is_all_day": bool(args.get("all_day", False)),
+            }
+        return _http_json(
+            "{}/open-apis/task/v2/tasks".format(base),
+            token,
+            opener,
+            method="POST",
+            body=body,
+        )
+
+    return action
+
+
 def _action_mock_write_note(conn, home, token, args, opener=None):
     path = Path(home) / "notes" / "mock-action.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -590,6 +735,74 @@ REGISTRY: Dict[str, ConnectorSpec] = {
         action_handlers={
             "create_draft": _action_microsoft_mail_draft,
             "send": _action_microsoft_mail_send,
+        },
+    ),
+    "feishu.calendar": ConnectorSpec(
+        id="feishu.calendar",
+        name="Feishu Calendar",
+        version="1.0.0",
+        auth="oauth2",
+        scopes=["calendar:calendar"],
+        actions=[
+            {"name": "list_events", "risk": "read"},
+            {"name": "create_event", "risk": "external"},
+        ],
+        sync=_feishu_calendar_sync("https://open.feishu.cn"),
+        description="Read and write Feishu Calendar events.",
+        oauth_provider="feishu",
+        action_handlers={
+            "create_event": _feishu_calendar_create("https://open.feishu.cn")
+        },
+    ),
+    "feishu.tasks": ConnectorSpec(
+        id="feishu.tasks",
+        name="Feishu Tasks",
+        version="1.0.0",
+        auth="oauth2",
+        scopes=["task:task:read", "task:task:write"],
+        actions=[
+            {"name": "list_tasks", "risk": "read"},
+            {"name": "create_task", "risk": "external"},
+        ],
+        sync=_feishu_task_sync("https://open.feishu.cn"),
+        description="Read and write Feishu Tasks.",
+        oauth_provider="feishu",
+        action_handlers={
+            "create_task": _feishu_task_create("https://open.feishu.cn")
+        },
+    ),
+    "lark.calendar": ConnectorSpec(
+        id="lark.calendar",
+        name="Lark Calendar",
+        version="1.0.0",
+        auth="oauth2",
+        scopes=["calendar:calendar"],
+        actions=[
+            {"name": "list_events", "risk": "read"},
+            {"name": "create_event", "risk": "external"},
+        ],
+        sync=_feishu_calendar_sync("https://open.larksuite.com"),
+        description="Read and write Lark Calendar events.",
+        oauth_provider="lark",
+        action_handlers={
+            "create_event": _feishu_calendar_create("https://open.larksuite.com")
+        },
+    ),
+    "lark.tasks": ConnectorSpec(
+        id="lark.tasks",
+        name="Lark Tasks",
+        version="1.0.0",
+        auth="oauth2",
+        scopes=["task:task:read", "task:task:write"],
+        actions=[
+            {"name": "list_tasks", "risk": "read"},
+            {"name": "create_task", "risk": "external"},
+        ],
+        sync=_feishu_task_sync("https://open.larksuite.com"),
+        description="Read and write Lark Tasks.",
+        oauth_provider="lark",
+        action_handlers={
+            "create_task": _feishu_task_create("https://open.larksuite.com")
         },
     ),
 }
@@ -867,6 +1080,25 @@ def sync(
                     payload.get("snippet"),
                     payload.get("body"),
                     payload.get("ts"),
+                ),
+            )
+        elif kind == "task":
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO tasks(
+                    id, title, status, due, source_run, created_at, updated_at,
+                    external_id, connector
+                ) VALUES(?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    payload.get("title", ""),
+                    payload.get("status", "open"),
+                    payload.get("due"),
+                    utc_now(),
+                    utc_now(),
+                    external_id,
+                    connector_id,
                 ),
             )
     conn.execute(

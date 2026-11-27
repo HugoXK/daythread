@@ -37,6 +37,14 @@ PROVIDERS = {
         "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
         "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     },
+    "feishu": {
+        "auth_url": "https://accounts.feishu.cn/open-apis/authen/v1/authorize",
+        "token_url": "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+    },
+    "lark": {
+        "auth_url": "https://accounts.larksuite.com/open-apis/authen/v1/authorize",
+        "token_url": "https://open.larksuite.com/open-apis/authen/v2/oauth/token",
+    },
 }
 
 

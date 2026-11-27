@@ -54,7 +54,7 @@ class ContractTest(unittest.TestCase):
             self.assertTrue(spec.scopes)
             self.assertTrue(spec.actions)
             if spec.auth == "oauth2":
-                self.assertIn(spec.oauth_provider, ("google", "microsoft"))
+                self.assertIn(spec.oauth_provider, ("google", "microsoft", "feishu", "lark"))
             action_names = {action["name"] for action in spec.actions}
             self.assertTrue(set(spec.action_handlers).issubset(action_names))
 

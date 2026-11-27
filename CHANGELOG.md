@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0 — Feishu and Lark connectors
+
+- Feishu and Lark OAuth providers (accounts + open API domains).
+- Feishu/Lark Calendar: read events, create events.
+- Feishu/Lark Tasks: read tasks (synced into local tasks), create tasks.
+- Connector sync now supports `task` items and preserves external IDs.
+- 204 unit tests.
+
 ## 0.11.0 — model streaming, retries, and egress policy
 
 - Model gateway: retry with exponential backoff, fallback chain, and usage
