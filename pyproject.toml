@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daythread"
-version = "0.21.0"
+version = "0.22.0"
 description = "Local-first, auditable personal agent baseline."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,7 +20,7 @@ dependencies = []
 
 [project.optional-dependencies]
 crypto = ["cryptography>=37"]
-dev = ["coverage>=7"]
+dev = ["coverage>=7", "ruff>=0.6"]
 
 [project.scripts]
 dt = "daythread.cli:main"
@@ -30,3 +30,17 @@ Design = "../docs/daythread-design.md"
 
 [tool.setuptools.packages.find]
 include = ["daythread*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.setuptools.package-data]
+daythread = ["py.typed"]

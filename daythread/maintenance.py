@@ -43,6 +43,7 @@ def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
         "counts": counts,
         "db_bytes": int(page_count) * int(page_size),
         "free_pages": conn.execute("PRAGMA freelist_count").fetchone()[0],
+        "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
     }
 
 
@@ -105,6 +106,10 @@ def prune(
     ).rowcount
 
     conn.execute("PRAGMA optimize")
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     if vacuum:
         conn.execute("VACUUM")

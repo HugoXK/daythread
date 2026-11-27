@@ -285,7 +285,7 @@ class ModelGateway:
                             },
                         )
                         return response
-                    except Exception as exc:  # noqa: BLE001 - retry/fallback
+                    except Exception:  # noqa: BLE001 - retry/fallback
                         if attempt + 1 < attempts:
                             obs.incr(self.conn, "model.retries")
                             time.sleep(config["retry_backoff"] * (2 ** attempt))

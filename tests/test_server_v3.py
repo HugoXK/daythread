@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from daythread import crypto
-
 from daythread.db import connect, init_db, set_setting
 from daythread.server import ApiServer
 

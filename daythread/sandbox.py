@@ -6,7 +6,7 @@ import json
 import platform
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from .db import get_setting
 from .errors import ValidationError

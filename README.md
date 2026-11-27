@@ -15,8 +15,8 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.21.0 — cross-platform Tauri shell.** Interfaces may still change. The goal
-is a small, correct, auditable core with tests (233 at this milestone, ~78% line
+**v0.22.0 — polish and quality gates.** Interfaces may still change. The goal is
+a small, correct, auditable core with tests (233 at this milestone, ~78% line
 coverage, 75% gate), not feature breadth.
 
 ## What works today
@@ -470,6 +470,13 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
 5. Linux/Docker sandboxing and cosign/SBOM attestations for releases.
+
+## Documentation
+
+- [`docs/CLI.md`](docs/CLI.md) — command reference
+- [`docs/API.md`](docs/API.md) — HTTP API, webhooks, errors, pagination
+- [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) — data inventory, DSAR, retention,
+  SOC 2-style mapping, incident response
 
 ## Compliance
 

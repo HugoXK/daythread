@@ -1,0 +1,103 @@
+# CLI reference
+
+`dt` is the only entry point. Data lives in `$DAYTHREAD_HOME` (default
+`~/.daythread`). Global flags: `--home`, `--db`, `--json`, `--version`.
+
+## Core
+
+| Command | Purpose |
+|---|---|
+| `dt init` / `migrate` / `doctor` | initialize, migrate, inspect local state |
+| `dt demo` | seed a demo dataset |
+| `dt brief [--evening]` | morning / evening brief |
+| `dt ask <text> [--stream]` | model gateway (local echo by default) |
+| `dt model list|usage` | model config and usage |
+| `dt bench [--facts N] [--runs N]` | Daythread Bench v0 |
+
+## Memory and privacy
+
+| Command | Purpose |
+|---|---|
+| `dt fact add|list|show|edit|rm|search` | structured facts |
+| `dt fact extract <text> [--apply]` | deterministic extraction |
+| `dt fact history <id>` / `conflicts` / `import <file>` | audit and import |
+| `dt privacy export --subject <id> [--out file]` | DSAR export |
+| `dt privacy forget --subject <id> [--hard]` | soft/hard forget |
+| `dt privacy purge --older-than N` | purge tombstones |
+
+Sensitive (`secret`/`health`) facts are hidden unless `--include-sensitive`.
+
+## Plans, runs, approvals
+
+```bash
+dt plan "<intent>" [--execute] [--file plan.json] [--taint untrusted]
+dt act <tool> --arg k=v [--taint untrusted]
+dt runs | show <id> | ledger <id> --verify
+dt approve <id> | reject <id> | undo <id> | resume <id> | cancel <id>
+dt policy show | set <risk> <allow|ask|deny>
+```
+
+`taint=untrusted` forces approval for every non-read step.
+
+## Connectors and skills
+
+```bash
+dt connector list | auth <id> | revoke <id> | connect <id> | disconnect <id>
+dt connector sync <id> [--reset] | state <id> | reset <id>
+dt connector call <id> <action> --arg k=v
+dt connector items <id>
+dt skill list | show <id> | install <file> | run <id> | uninstall <id>
+```
+
+## Proactivity, scheduler, webhooks
+
+```bash
+dt signal add|list
+dt proactive [--deliver] | candidate list | feedback <id> accept|ignore|mute
+dt tick [--job morning|evening|maintenance] | daemon [--interval 60]
+dt notifications | scheduler list
+dt webhook secret set|rm <source> | webhook sign <source> --payload JSON | webhook events
+```
+
+## Sync, relay, backup
+
+```bash
+dt sync export|import|verify|push|pull|devices [--passphrase-env ENV]
+dt sync push --relay URL --device ID [--if-match ETAG] [--on-conflict fail|pull]
+dt relay serve [--port 8788] [--certfile cert --keyfile key] [--devices FILE]
+dt relay devices add|list|remove [--file PATH]
+dt backup [--out DIR] [--passphrase-env DAYTHREAD_BACKUP_PASSPHRASE]
+dt restore <file> [--verify] [--replace] [--trust]
+```
+
+## MCP and HTTP
+
+```bash
+dt mcp add|list|remove|tools|call|serve
+dt serve [--host 127.0.0.1] [--port 8765] [--certfile cert --keyfile key]
+dt ui [--port 8765] [--no-browser]
+```
+
+## Maintenance
+
+```bash
+dt maintenance stats
+dt maintenance prune --older-than 90 --keep-runs 200 --vacuum
+dt audit | metrics | export [--format md|json] [--include-sensitive]
+dt config show | set <key> <value>
+```
+
+## Environment
+
+| Variable | Purpose |
+|---|---|
+| `DAYTHREAD_HOME` | data directory |
+| `DAYTHREAD_BIN` | desktop shells' `dt` path |
+| `DAYTHREAD_PASSPHRASE` | sync passphrase |
+| `DAYTHREAD_BACKUP_PASSPHRASE` | encrypted backup passphrase |
+| `DAYTHREAD_RELAY_TOKEN` | relay bearer token |
+| `DAYTHREAD_RELEASE_KEY` | HMAC release key |
+| `DAYTHREAD_LOG_LEVEL` | structured log level |
+
+Exit code `0` on success, `1` on a handled error, non-zero from the OS for
+fatal failures.

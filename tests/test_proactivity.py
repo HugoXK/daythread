@@ -6,7 +6,6 @@ from pathlib import Path
 from daythread import memory, proactivity
 from daythread.db import connect, init_db
 
-
 NOON = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
 NIGHT = datetime(2026, 11, 26, 3, 0, tzinfo=timezone.utc)
 

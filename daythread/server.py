@@ -14,7 +14,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -23,6 +23,7 @@ from . import (
     brief,
     connectors,
     memory,
+    migrations,
     models,
     obs,
     proactivity,
@@ -31,7 +32,6 @@ from . import (
     ui,
     webhook,
 )
-from . import migrations
 from .db import connect, get_setting, init_db, is_initialized
 from .errors import DaythreadError
 

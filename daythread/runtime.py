@@ -474,7 +474,6 @@ def execute_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, 
     checkpoint = run["checkpoint"] or {"completed": []}
     completed = set(checkpoint.get("completed", []))
     budget = run["budget"] or _default_budget(conn)
-    started = _elapsed_seconds(run["created_at"])
 
     for step in steps:
         if step["id"] in completed:

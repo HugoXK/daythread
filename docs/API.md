@@ -1,0 +1,67 @@
+# HTTP API
+
+Base URL: `http://127.0.0.1:8765` (or `https://` with `--certfile/--keyfile`).
+All endpoints except `/v1/health`, `/ui`, and `/v1/webhooks/{source}` require:
+
+```http
+Authorization: Bearer <token>
+```
+
+Read the token with `dt serve --print-token`. The token file is `0600`.
+`/v1/health` is unauthenticated; `/ui` embeds the token in a loopback page;
+webhooks use per-source signatures.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/health` | liveness |
+| GET | `/v1/version` | version |
+| GET | `/v1/openapi.json` | OpenAPI document |
+| GET | `/v1/today?evening=1` | brief |
+| GET/POST | `/v1/facts` | list/add (`limit`, `offset`, `include_sensitive`) |
+| GET/DELETE | `/v1/facts/{id}` | get/tombstone |
+| GET/POST | `/v1/runs` | list/propose (`taint`, `force_approval`, `Idempotency-Key`) |
+| GET | `/v1/runs/{id}` | run + steps |
+| GET | `/v1/runs/{id}/ledger` | hash-chained steps |
+| POST | `/v1/runs/{id}/approve|reject|undo|resume|cancel` | run actions |
+| GET | `/v1/candidates?status=new` | proactive candidates |
+| POST | `/v1/feedback` | accept/ignore/mute |
+| GET | `/v1/connectors` | connector status |
+| POST | `/v1/connectors/{id}/sync` | sync |
+| POST | `/v1/connectors/{id}/actions/{action}` | propose a write action |
+| GET | `/v1/notifications` | scheduler notifications |
+| POST | `/v1/tick` | run a scheduler job |
+| GET | `/v1/models` | model config/usage |
+| POST | `/v1/ask` | model call (`text`, `task`, `use_cache`) |
+| GET | `/v1/metrics` | JSON metrics |
+| GET | `/metrics` | Prometheus text |
+| GET | `/ui` | loopback dashboard |
+| POST | `/v1/webhooks/{source}` | signed webhook ingestion |
+
+## Errors
+
+```json
+{"error": "validation_error", "detail": "...", "request_id": "..."}
+```
+
+`400` validation, `401` auth/signature, `404` not found, `429` rate limit,
+`500` internal (no internal detail), `502` provider/relay failure.
+
+## Rate limits and pagination
+
+- `api.rate_limit_per_minute` (default 120), persistent per token.
+- List endpoints accept `limit` (max 200) and `offset`.
+- `X-Request-Id` is echoed; send your own to correlate.
+
+## Webhooks
+
+- Generic: `X-Daythread-Timestamp` + `X-Daythread-Signature: sha256=<hex>` over
+  `timestamp.body`.
+- Microsoft: `clientState` in the JSON body; validation token handshake returns
+  the token as text.
+- Google: `X-Goog-Channel-Token` must match the source secret.
+- Feishu: `X-Lark-Request-Timestamp`, `X-Lark-Request-Nonce`,
+  `X-Lark-Signature` = `sha256(timestamp + nonce + secret + body)`.
+
+Configure the mode with `dt config set webhook.<source>.mode <generic|microsoft|google|feishu>`.

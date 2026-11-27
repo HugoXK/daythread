@@ -1,10 +1,13 @@
-.PHONY: test ci coverage release app tauri tauri-bundle bench load docker demo install clean
+.PHONY: test ci lint coverage release app tauri tauri-bundle bench load docker demo install clean
 
 test:
 	python3 -m unittest discover -s tests -v
 
-ci: test
+ci: lint test
 	python3 -m compileall -q daythread tests
+
+lint:
+	python3 -m ruff check daythread tests scripts
 
 coverage:
 	rm -f .coverage .coverage.*

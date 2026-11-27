@@ -2,8 +2,8 @@ import platform
 import shutil
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 from daythread import runtime, sandbox
 from daythread.db import connect, init_db, set_setting

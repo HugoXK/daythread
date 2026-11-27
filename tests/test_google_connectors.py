@@ -8,7 +8,6 @@ from daythread import connectors, crypto, oauth, runtime
 from daythread.db import connect, init_db
 from daythread.errors import ValidationError
 
-
 NOW = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
 
 

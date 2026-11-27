@@ -164,7 +164,7 @@ def daemon(
     interval: int = 60,
     max_ticks: Optional[int] = None,
 ) -> None:
-    from .db import connect, init_db, is_initialized
+    from .db import connect, init_db
 
     ticks = 0
     while True:

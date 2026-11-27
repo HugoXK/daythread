@@ -2,7 +2,6 @@ import base64
 import hashlib
 import json
 import tempfile
-import threading
 import unittest
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -11,7 +10,6 @@ from urllib.parse import parse_qs, urlparse
 
 from daythread import crypto, oauth
 from daythread.db import connect, init_db, set_setting
-from daythread.errors import DaythreadError
 
 
 class FakeTokenEndpoint:

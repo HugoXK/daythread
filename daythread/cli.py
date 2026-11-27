@@ -21,7 +21,6 @@ from . import (
     bench,
     brief,
     connectors,
-    crypto,
     export,
     maintenance,
     mcp,
@@ -42,7 +41,7 @@ from . import (
     webhook,
 )
 from .crypto import SecretVault
-from .db import connect, init_db, is_initialized, set_setting
+from .db import connect, get_setting, init_db, set_setting
 from .errors import DaythreadError
 from .ledger import get_steps, verify_run
 from .server import ApiServer, ensure_token
@@ -1257,12 +1256,16 @@ def _doctor(conn, home: Path, db_path: Path) -> None:
         "mcp_servers",
     ):
         counts[table] = conn.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0]
+    latest = migrations.LATEST_VERSION
     print("home:        {}".format(home))
     print("db:          {}".format(db_path))
-    print("schema:      v{}".format(version))
+    print("schema:      v{}{}".format(version, " (latest)" if version == latest else " (expected v{})".format(latest)))
     print("integrity:   {}".format(integrity))
     print("writable:    {}".format(os.access(home, os.W_OK)))
     print("api_token:   {}".format((home / "api_token").exists()))
+    print("sandbox:     {}".format(get_setting(conn, "sandbox.backend", "none")))
+    print("model_egress:{}".format(get_setting(conn, "model.egress", "allow")))
+    print("ui:          {}".format(get_setting(conn, "api.ui_enabled", "1")))
     print("policy:      {}".format(json.dumps(policy.load_policy(conn), sort_keys=True)))
     print("counts:      {}".format(json.dumps(counts, sort_keys=True)))
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.0 — polish and quality gates
+
+- Ruff lint config and CI lint step; `make lint` and `ci: lint test`.
+- `py.typed` marker and package data.
+- `dt doctor` reports schema freshness, sandbox backend, model egress, and UI.
+- Maintenance does a best-effort WAL checkpoint; stats include journal mode.
+- Added CLI and API reference docs.
+- 233 unit tests; coverage 78%.
+
 ## 0.21.0 — cross-platform Tauri shell
 
 - Tauri v2 desktop shell (`desktop-tauri/`) driving `dt` via a Rust command.
