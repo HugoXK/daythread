@@ -13,7 +13,7 @@ client, a scheduler, backups, and a local HTTP API. Everything runs on your
 machine with **zero third-party dependencies**.
 
 This is the working baseline for the design in
-[`../docs/daythread-design.md`](../docs/daythread-design.md). It is intentionally
+[`docs/DESIGN.md`](docs/DESIGN.md). It is intentionally
 written in Python 3.9+ standard library so the core mechanics can be run,
 audited, and ported to the Rust/Tauri target without a build toolchain.
 

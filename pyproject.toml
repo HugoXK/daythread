@@ -27,7 +27,7 @@ sidecar = ["pyinstaller>=6"]
 dt = "daythread.cli:main"
 
 [project.urls]
-Design = "../docs/daythread-design.md"
+Design = "docs/DESIGN.md"
 
 [tool.setuptools.packages.find]
 include = ["daythread*"]
