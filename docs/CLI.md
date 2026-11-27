@@ -39,6 +39,11 @@ dt policy show | set <risk> <allow|ask|deny>
 
 `taint=untrusted` forces approval for every non-read step.
 
+`resume` refuses a failed run when a non-idempotent step may have partially
+executed (its idempotency state is `started` or `failed`). Verify the external
+side effect first, inspect `dt show <id>` / `dt ledger <id> --verify`, and start
+a new run if a retry is needed; the failed run stays as an audit record.
+
 ## Connectors and skills
 
 ```bash
