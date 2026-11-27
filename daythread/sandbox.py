@@ -29,6 +29,8 @@ def wrap(
         return _sandbox_exec(command, Path(home), allow_network)
     if selected == "docker":
         return _docker(command, conn, Path(home), allow_network)
+    if selected == "bwrap":
+        return _bwrap(command, Path(home), allow_network)
     raise ValidationError("unknown sandbox backend: {}".format(selected))
 
 
@@ -100,3 +102,33 @@ def _docker(
         "PYTHONDONTWRITEBYTECODE=1",
         image,
     ] + list(command)
+
+
+def _bwrap(
+    command: List[str],
+    home: Path,
+    allow_network: bool,
+) -> List[str]:
+    executable = shutil.which("bwrap")
+    if not executable:
+        raise ValidationError("bubblewrap (bwrap) is not installed")
+    home = Path(home).resolve()
+    wrapped = [
+        executable,
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--bind",
+        str(home),
+        str(home),
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+    ]
+    if not allow_network:
+        wrapped.append("--unshare-net")
+    return wrapped + list(command)

@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.18.0 — Ed25519 releases, HTTPS, Docker sandbox.** Interfaces may still
-change. The goal is a small, correct, auditable core with tests (230 at this
-milestone, ~78% line coverage, 75% gate), not feature breadth.
+**v0.19.0 — Linux sandbox and compliance guide.** Interfaces may still change.
+The goal is a small, correct, auditable core with tests (231 at this milestone,
+~78% line coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -67,7 +67,8 @@ milestone, ~78% line coverage, 75% gate), not feature breadth.
   Prometheus metrics. Binds `127.0.0.1` only.
 - **Hardening**: atomic run leases, step timeouts, subprocess isolation for
   external/MCP/connector/shell tools with process-group kill, optional macOS
-  `sandbox-exec` or Docker sandbox, retention/pruning, signed/encrypted backups,
+  `sandbox-exec`, bubblewrap, or Docker sandbox, retention/pruning, signed/
+  encrypted backups,
   encrypted model cache, sensitivity filters, MCP command allowlist, OAuth
   revoke/scope checks, relay TLS/retention/device tokens.
 - **Operations**: schema migrations, `doctor`, structured audit log, metrics,
@@ -421,7 +422,8 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
 - **OS sandbox**: `sandbox.backend=sandbox-exec` restricts file writes to the
   Daythread home/temp and denies network for `shell.run` (macOS).
   `sandbox.backend=docker` runs isolated tools in a read-only container with a
-  home mount and configurable network.
+  home mount and configurable network; `sandbox.backend=bwrap` uses Linux
+  namespaces with `--unshare-net` for shell tools.
 - **Dashboard**: loopback-only, CSP-protected, and embeds the bearer token only
   in the local page. Disable with `api.ui_enabled=0`.
 - **Release**: SHA256SUMS + SBOM; HMAC with `DAYTHREAD_RELEASE_KEY` or Ed25519
@@ -460,6 +462,12 @@ the HTTP API (auth, pagination, rate limits, request IDs, OpenAPI), and CLI.
 3. Expand Daythread Bench into a public, reproducible benchmark suite.
 4. Hosted deployment, observability backend, and compliance program.
 5. Linux/Docker sandboxing and cosign/SBOM attestations for releases.
+
+## Compliance
+
+See [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) for data inventory, DSAR,
+retention, encryption, SOC 2-style control mapping, incident response, and
+known gaps. It is a guide, not a certification.
 
 ## License
 

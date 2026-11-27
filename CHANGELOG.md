@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.0 — Linux sandbox and compliance guide
+
+- Linux bubblewrap (`bwrap`) sandbox backend with network namespace isolation.
+- Compliance and operations guide: data inventory, DSAR, retention, encryption,
+  SOC 2-style control mapping, incident response, subprocessors, known gaps.
+- 231 unit tests.
+
 ## 0.18.0 — Ed25519 releases, HTTPS, Docker sandbox
 
 - Ed25519 release signing with `--generate-key` / `--signing-key`, embedded

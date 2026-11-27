@@ -2,6 +2,7 @@ import platform
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from daythread import runtime, sandbox
@@ -38,6 +39,14 @@ class SandboxTest(unittest.TestCase):
         self.assertEqual(wrapped[1], "-p")
         self.assertIn("deny network*", wrapped[2])
         self.assertIn(str(self.home.resolve()), wrapped[2])
+
+    def test_bwrap_wrap(self):
+        with mock.patch("daythread.sandbox.shutil.which", return_value="/usr/bin/bwrap"):
+            set_setting(self.conn, "sandbox.backend", "bwrap")
+            wrapped = sandbox.wrap(["echo", "hi"], self.conn, self.home, allow_network=False)
+        self.assertEqual(wrapped[0], "/usr/bin/bwrap")
+        self.assertIn("--unshare-net", wrapped)
+        self.assertTrue(any(str(self.home.resolve()) in part for part in wrapped))
 
     def test_docker_wrap(self):
         if not shutil.which("docker"):
