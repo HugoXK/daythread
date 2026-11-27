@@ -15,3 +15,5 @@ desktop/.build/
 desktop/.swiftpm/
 release.pem
 *.key.pem
+desktop-tauri/src-tauri/target/
+desktop-tauri/src-tauri/gen/

@@ -1,4 +1,4 @@
-.PHONY: test ci coverage release app bench load docker demo install clean
+.PHONY: test ci coverage release app tauri bench load docker demo install clean
 
 test:
 	python3 -m unittest discover -s tests -v
@@ -17,6 +17,9 @@ release:
 
 app:
 	./scripts/build_app.sh
+
+tauri:
+	cd desktop-tauri/src-tauri && PATH="$$HOME/.cargo/bin:$$PATH" cargo build --release
 
 bench:
 	python3 -m daythread bench

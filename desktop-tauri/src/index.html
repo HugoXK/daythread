@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daythread</title>
+<style>
+:root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e6e8ee; --muted:#9aa3b2; --accent:#7aa2ff; --danger:#ff7a90; }
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+header { display:flex; gap:12px; align-items:center; padding:14px 18px; border-bottom:1px solid #2a2f3a; }
+h1 { font-size:17px; margin:0; }
+main { display:grid; grid-template-columns:2fr 1fr; gap:14px; padding:16px; height:calc(100vh - 58px); }
+section { background:var(--panel); border:1px solid #262c37; border-radius:12px; padding:12px 14px; overflow:auto; }
+h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 8px; }
+pre { white-space:pre-wrap; font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; margin:0; }
+button { background:transparent; color:var(--text); border:1px solid #343b49; border-radius:8px; padding:5px 9px; cursor:pointer; }
+button.primary { color:var(--accent); border-color:var(--accent); }
+button.danger { color:var(--danger); border-color:var(--danger); }
+.item { border-top:1px solid #262c37; padding:8px 0; display:flex; gap:8px; justify-content:space-between; align-items:center; }
+.item:first-of-type { border-top:0; }
+.muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Daythread · 朝夕</h1>
+  <span id="status" class="muted">loading…</span>
+  <span style="flex:1"></span>
+  <button onclick="refresh()">Refresh</button>
+</header>
+<main>
+  <section><h2>Today</h2><pre id="today">—</pre></section>
+  <section><h2>Runs</h2><div id="runs" class="muted">—</div></section>
+</main>
+<script>
+const invoke = window.__TAURI__.core.invoke;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function run(args) { return invoke('run_dt', {args}); }
+async function refresh() {
+  try {
+    document.getElementById('today').textContent = await run(['brief']);
+    const runs = JSON.parse(await run(['--json','runs','--limit','20']));
+    const box = document.getElementById('runs');
+    box.innerHTML = runs.length ? runs.map(r => {
+      const actions = r.state === 'pending_approval'
+        ? `<button class="primary" onclick="act('${r.id}','approve')">Approve</button> <button class="danger" onclick="act('${r.id}','reject')">Reject</button>`
+        : (r.state === 'completed' ? `<button onclick="act('${r.id}','undo')">Undo</button>` : '');
+      return `<div class="item"><span>${esc(r.tool)} · ${esc(r.state)}<br><span class="muted">${esc(r.intent)}</span></span><span>${actions}</span></div>`;
+    }).join('') : '<span class="muted">No runs.</span>';
+    document.getElementById('status').textContent = 'online';
+  } catch (error) {
+    document.getElementById('status').textContent = String(error);
+  }
+}
+async function act(id, action) {
+  try { await run([action, id]); await refresh(); }
+  catch (error) { document.getElementById('status').textContent = String(error); }
+}
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

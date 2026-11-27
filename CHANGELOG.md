@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.0 — cross-platform Tauri shell
+
+- Tauri v2 desktop shell (`desktop-tauri/`) driving `dt` via a Rust command.
+- `cargo build --release` verified; Rust toolchain installed from the rsproxy
+  mirror.
+- Tauri app mirrors the SwiftUI shell: Today, runs, approve/reject/undo.
+- 233 unit tests.
+
 ## 0.20.0 — provider webhooks and signed SBOM
 
 - Webhook modes: generic HMAC, Microsoft clientState + validationToken

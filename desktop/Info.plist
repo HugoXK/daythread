@@ -5,8 +5,8 @@
     <key>CFBundleName</key><string>Daythread</string>
     <key>CFBundleDisplayName</key><string>Daythread</string>
     <key>CFBundleIdentifier</key><string>online.hugoxk.daythread</string>
-    <key>CFBundleVersion</key><string>0.16.0</string>
-    <key>CFBundleShortVersionString</key><string>0.16.0</string>
+    <key>CFBundleVersion</key><string>0.21.0</string>
+    <key>CFBundleShortVersionString</key><string>0.21.0</string>
     <key>CFBundleExecutable</key><string>Daythread</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>

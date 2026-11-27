@@ -15,9 +15,9 @@ audited, and ported to the Rust/Tauri target without a build toolchain.
 
 ## Status
 
-**v0.20.0 — provider webhooks and signed SBOM.** Interfaces may still change.
-The goal is a small, correct, auditable core with tests (233 at this milestone,
-~78% line coverage, 75% gate), not feature breadth.
+**v0.21.0 — cross-platform Tauri shell.** Interfaces may still change. The goal
+is a small, correct, auditable core with tests (233 at this milestone, ~78% line
+coverage, 75% gate), not feature breadth.
 
 ## What works today
 
@@ -80,6 +80,8 @@ The goal is a small, correct, auditable core with tests (233 at this milestone,
   runs, and memory search.
 - **Native shell**: `desktop/` is a SwiftUI macOS app that drives `dt` (Today,
   runs, approve/reject/undo, memory search) and builds an ad-hoc signed `.app`.
+- **Cross-platform shell**: `desktop-tauri/` is a Tauri v2 app (Rust command +
+  web UI) that drives the same `dt` CLI; `cargo build --release` verified.
 - **Release**: wheel build, SHA256SUMS, CycloneDX-style SBOM, and optional
   HMAC or Ed25519-signed release manifest with embedded public key.
 
@@ -274,7 +276,8 @@ make release
 python3 scripts/release.py --generate-key release.pem
 python3 scripts/release.py --build --signing-key release.pem
 make docker
-make app          # dist/Daythread.app
+make app          # SwiftUI dist/Daythread.app
+make tauri        # Tauri release build
 open dist/Daythread.app
 
 # Local dashboard.
@@ -340,9 +343,10 @@ CLI (dt) / HTTP API
   └─ errors.py           domain errors with stable HTTP codes
 ```
 
-The native shell lives in `desktop/` (SwiftUI, macOS 13+). It calls `dt` from
-`PATH`; set `DAYTHREAD_BIN` to override. Data lives in
-`$DAYTHREAD_HOME/daythread.db` (default `~/.daythread`).
+The native shell lives in `desktop/` (SwiftUI, macOS 13+) and the cross-platform
+shell in `desktop-tauri/` (Tauri v2). Both call `dt` from `PATH`; set
+`DAYTHREAD_BIN` to override. Data lives in `$DAYTHREAD_HOME/daythread.db`
+(default `~/.daythread`).
 Notes, drafts, sandbox files, backups, the API token, and the notification
 outbox live under the same home. Nothing leaves the machine unless you
 configure a remote model provider or MCP server.
@@ -429,8 +433,9 @@ The API includes request IDs (`X-Request-Id`), per-token rate limiting
   in the local page. Disable with `api.ui_enabled=0`.
 - **Release**: SHA256SUMS + SBOM; the manifest includes the SBOM SHA256 and is
   HMAC- or Ed25519-signed (public key embedded).
-- **Native shell**: the SwiftUI app invokes the local `dt` CLI with the same
-  permissions; review commands before use and keep `dt` on a trusted path.
+- **Native shells**: the SwiftUI and Tauri apps invoke the local `dt` CLI with
+  the same permissions; review commands before use and keep `dt` on a trusted
+  path.
 - **MCP server**: read-only by default; write tools are hidden unless
   `--allow-write` is set; plans proposed by external agents require approval.
 - **Connector actions** are `external` by default: a run is created and must be
