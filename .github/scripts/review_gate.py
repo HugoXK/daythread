@@ -9,7 +9,14 @@ post a verdict in any of three places:
 
 The newest verdict at the head SHA is the one that counts. A new commit moves the
 head, so an older PASS no longer applies. A REQUEST_CHANGES is a blocking
-verdict even if a PASS was posted earlier.
+verdict even if a PASS was posted earlier. A verdict in a pull request issue
+comment only counts when the SHA immediately after the verdict phrase is the
+full 40-character head SHA (a short prefix or a missing SHA does not count).
+A `COMMENTED` review or commit comment binds the SHA after the phrase the same
+way when one is present; a verdict with no SHA counts only on its first
+non-empty line.
+Fenced code blocks and `>`-quoted lines are stripped before any path parses a
+verdict.
 
 A **T0 docs-only** pull request may be waived by policy when
 `t0DocsAutoPass` is true and the reviewer has posted no verdict at all. An
@@ -40,6 +47,10 @@ VERDICT_RE = re.compile(
     r"(?:^|\n)\s*(?:Verdict\s*:\s*|##\s*Review\s*[—-]\s*)(PASS|REQUEST_CHANGES)\b",
     re.IGNORECASE,
 )
+SHA_AFTER_VERDICT_RE = re.compile(
+    r"^\s*(?:at\s+)?`?([0-9a-fA-F]{7,})`?", re.IGNORECASE
+)
+FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 
 DOC_FILES = {
     "README.md",
@@ -97,14 +108,91 @@ def reviewer_login(policy: dict[str, Any] | None = None) -> str:
     return REVIEWER_FALLBACK
 
 
+def strip_noise(body: str) -> str:
+    """Drop fenced code blocks and `>`-quoted lines before parsing verdicts."""
+    kept = []
+    fence = None
+    for line in (body or "").splitlines():
+        match = FENCE_RE.match(line)
+        if fence is None:
+            if match:
+                fence = match.group(1)[0]
+                continue
+            if line.lstrip().startswith(">"):
+                continue
+            kept.append(line)
+        else:
+            if match and match.group(1)[0] == fence:
+                fence = None
+            continue
+    return "\n".join(kept)
+
+
 def parse_verdict(body: str) -> str | None:
-    match = VERDICT_RE.search(body or "")
+    match = VERDICT_RE.search(strip_noise(body))
     return match.group(1).upper() if match else None
 
 
+def _verdict_context(stripped: str, match):
+    line_end = stripped.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(stripped)
+    line_start = stripped.rfind("\n", 0, match.end()) + 1
+    return stripped[line_start:line_end], stripped[match.end():line_end]
+
+
+def _sha_after(after: str) -> str | None:
+    sha = SHA_AFTER_VERDICT_RE.match(after)
+    return sha.group(1) if sha else None
+
+
+def _first_non_empty_line(stripped: str) -> str:
+    for line in stripped.splitlines():
+        if line.strip():
+            return line
+    return ""
+
+
+def parse_verdict(body: str) -> str | None:
+    match = VERDICT_RE.search(strip_noise(body))
+    return match.group(1).upper() if match else None
+
+
+def head_bound_verdict(body: str, head: str) -> str | None:
+    """Issue comments: the SHA after the verdict phrase must be the full head."""
+    stripped = strip_noise(body)
+    match = VERDICT_RE.search(stripped)
+    if not match:
+        return None
+    verdict = match.group(1).upper()
+    _, after = _verdict_context(stripped, match)
+    sha = _sha_after(after)
+    if sha is None:
+        return None
+    if len(sha) == 40 and sha.lower() == head.lower():
+        return verdict
+    return None
+
+
+def review_verdict(body: str, head: str) -> str | None:
+    """COMMENTED reviews: bind a present SHA; no-SHA only on the first line."""
+    stripped = strip_noise(body)
+    match = VERDICT_RE.search(stripped)
+    if not match:
+        return None
+    verdict = match.group(1).upper()
+    line, after = _verdict_context(stripped, match)
+    sha = _sha_after(after)
+    if sha is not None:
+        if len(sha) == 40 and sha.lower() == head.lower():
+            return verdict
+        return None
+    return verdict if line == _first_non_empty_line(stripped) else None
+
+
 def references_head(body: str, head: str) -> bool:
-    lowered = (body or "").lower()
-    return head.lower() in lowered or head[:7].lower() in lowered
+    """Full-SHA containment only; prefix matching was the #46 bypass."""
+    return head.lower() in (body or "").lower()
 
 
 def is_docs_only(paths: list[str]) -> bool:
@@ -178,7 +266,7 @@ def newest_verdict(pull: dict[str, Any], reviewer: str) -> tuple[bool | None, st
         elif state == "CHANGES_REQUESTED":
             verdicts.append((stamp, "REQUEST_CHANGES", "changes-requested review"))
         elif state == "COMMENTED":
-            verdict = parse_verdict(str(review.get("body") or ""))
+            verdict = review_verdict(str(review.get("body") or ""), head)
             if verdict:
                 verdicts.append((stamp, verdict, "review comment"))
 
@@ -187,9 +275,7 @@ def newest_verdict(pull: dict[str, Any], reviewer: str) -> tuple[bool | None, st
         if str(comment.get("user", {}).get("login", "")) != reviewer:
             continue
         body = str(comment.get("body") or "")
-        if not references_head(body, head):
-            continue
-        verdict = parse_verdict(body)
+        verdict = head_bound_verdict(body, head)
         if verdict:
             verdicts.append(
                 (str(comment.get("created_at") or ""), verdict, "pull request comment")
@@ -199,7 +285,7 @@ def newest_verdict(pull: dict[str, Any], reviewer: str) -> tuple[bool | None, st
     for comment in commit_comments:
         if str(comment.get("user", {}).get("login", "")) != reviewer:
             continue
-        verdict = parse_verdict(str(comment.get("body") or ""))
+        verdict = review_verdict(str(comment.get("body") or ""), head)
         if verdict:
             verdicts.append(
                 (str(comment.get("created_at") or ""), verdict, "commit comment")
