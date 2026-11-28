@@ -931,6 +931,9 @@ def _plan(args: argparse.Namespace, conn, home: Path) -> None:
 
 
 def _ledger(args: argparse.Namespace, conn) -> None:
+    # Refuse unknown run ids before printing anything: an empty step list
+    # otherwise "verifies" cleanly and reports a misleading ledger OK.
+    runtime.get_run(conn, args.run_id)
     steps = get_steps(conn, args.run_id)
     verify_errors = []
     verify_failed = False

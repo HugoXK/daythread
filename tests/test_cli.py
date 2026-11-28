@@ -164,6 +164,46 @@ class CliTest(unittest.TestCase):
         self.assertIn("error:", err)
         self.assertNotIn("Traceback", err)
 
+    def test_ledger_verify_rejects_unknown_run(self):
+        code, out, err = run_cli(
+            ["--home", self.home, "ledger", "deadbeef", "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("error: run not found: deadbeef", err)
+        self.assertNotIn("ledger OK", out)
+        self.assertNotIn("Traceback", err)
+
+        code, out, err = run_cli(
+            ["--home", self.home, "--json", "ledger", "deadbeef", "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("run not found", err)
+        self.assertNotIn("ledger OK", out)
+
+    def test_ledger_verify_rejects_short_run_id_prefix(self):
+        code, _, _ = run_cli(
+            [
+                "--home",
+                self.home,
+                "act",
+                "note.write",
+                "--arg",
+                "path=launch.md",
+                "--arg",
+                "content=hello",
+            ]
+        )
+        self.assertEqual(code, 0)
+        code, out, _ = run_cli(["--home", self.home, "--json", "runs", "--limit", "1"])
+        run_id = json.loads(out)[0]["id"]
+        code, out, err = run_cli(
+            ["--home", self.home, "ledger", run_id[:8], "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertNotIn("ledger OK", out)
+        self.assertIn("run not found", err)
+
     def test_serve_and_ui_reject_symlinked_home_before_side_effects(self):
         real = Path(self.home) / "real-home"
         real.mkdir()
