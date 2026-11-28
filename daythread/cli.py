@@ -931,7 +931,19 @@ def _plan(args: argparse.Namespace, conn, home: Path) -> None:
 
 
 def _ledger(args: argparse.Namespace, conn) -> None:
+    # Refuse unknown run ids before printing anything: an empty step list
+    # otherwise "verifies" cleanly and reports a misleading ledger OK.
+    runtime.get_run(conn, args.run_id)
     steps = get_steps(conn, args.run_id)
+    if args.verify and not steps:
+        # An empty chain is vacuously consistent: exit 0 without claiming OK.
+        if args.as_json:
+            _print_json(
+                {"run_id": args.run_id, "ok": True, "errors": [], "steps": steps}
+            )
+            return
+        print("ledger {}: no steps".format(args.run_id))
+        return
     verify_errors = []
     verify_failed = False
     if args.verify:
