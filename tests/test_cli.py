@@ -1,10 +1,12 @@
 import io
 import json
+import shlex
 import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from daythread.cli import main
 
@@ -161,6 +163,53 @@ class CliTest(unittest.TestCase):
         self.assertTrue(data["errors"])
         self.assertIn("error:", err)
         self.assertNotIn("Traceback", err)
+
+    def test_serve_and_ui_reject_symlinked_home_before_side_effects(self):
+        real = Path(self.home) / "real-home"
+        real.mkdir()
+        link = Path(self.home) / "linked home"
+        link.symlink_to(real, target_is_directory=True)
+
+        with mock.patch("daythread.cli.ApiServer") as api:
+            api.return_value.serve_forever.side_effect = KeyboardInterrupt
+            for argv in (
+                ["--home", str(link), "serve"],
+                ["--home", str(link), "ui", "--no-browser"],
+            ):
+                code, out, err = run_cli(argv)
+                self.assertNotEqual(code, 0)
+                self.assertIn("error:", err)
+                self.assertIn("symlink", err)
+                self.assertIn("rm " + shlex.quote(str(link)), err)
+                self.assertNotIn("Traceback", err)
+            api.assert_not_called()
+
+        self.assertFalse((real / "daythread.db").exists())
+        self.assertFalse((real / "api_token").exists())
+
+    def test_non_server_commands_still_follow_symlinked_home(self):
+        real = Path(self.home) / "real-home"
+        real.mkdir()
+        link = Path(self.home) / "linked home"
+        link.symlink_to(real, target_is_directory=True)
+        code, out, err = run_cli(["--home", str(link), "fact", "list"])
+        self.assertEqual(code, 0, err)
+
+    def test_serve_and_ui_accept_real_home(self):
+        real = Path(self.home) / "real-home"
+        real.mkdir()
+        with mock.patch("daythread.cli.ApiServer") as api:
+            api.return_value.serve_forever.side_effect = KeyboardInterrupt
+            api.return_value.scheme = "http"
+            api.return_value.port = 8765
+            for argv in (
+                ["--home", str(real), "serve"],
+                ["--home", str(real), "ui", "--no-browser"],
+            ):
+                code, out, err = run_cli(argv)
+                self.assertEqual(code, 0, err)
+                self.assertNotIn("symlink", err)
+        self.assertEqual(api.call_count, 2)
 
     def test_policy_deny_blocks_external(self):
         code, out, _ = run_cli(
