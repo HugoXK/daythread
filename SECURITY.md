@@ -40,6 +40,11 @@ The baseline is designed to preserve these invariants:
   the `destructive` policy tier.
 - The local API rejects unauthenticated requests, uses constant-time token
   comparison, enforces per-token rate limits, and serves no CORS headers.
+- `dt serve` enforces `0700` on `$DAYTHREAD_HOME` and `0600` on
+  `$DAYTHREAD_HOME/api_token` at startup (pre-existing modes are corrected) and
+  fails closed with a copy-paste `chmod` command if it cannot. API and `/ui`
+  responses send `X-Frame-Options: DENY`, CSP `frame-ancestors 'none'`,
+  `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.
 - MCP servers are explicitly registered, executed without a shell, and tool
   calls default to the `external` risk tier.
 - Backups are checksummed and redact known secrets before writing.

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import ssl
 import threading
@@ -37,11 +38,35 @@ from .errors import DaythreadError
 
 MAX_BODY = 1_048_576
 
+HTML_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'unsafe-inline'; "
+    "style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"
+)
+FRAME_CONTENT_SECURITY_POLICY = "frame-ancestors 'none'"
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _chmod_or_fail(path: Path, mode: int) -> None:
+    try:
+        os.chmod(str(path), mode)
+    except OSError as exc:
+        command = "chmod {:o} {}".format(mode, shlex.quote(str(path)))
+        raise RuntimeError(
+            "refusing to start: cannot set permissions {:04o} on {}: {}. "
+            "Fix: {}".format(mode, path, exc, command)
+        ) from exc
+
 
 def ensure_token(home: Path, rotate: bool = False) -> str:
     home.mkdir(parents=True, exist_ok=True)
+    _chmod_or_fail(home, 0o700)
     path = home / "api_token"
     if path.exists() and not rotate:
+        _chmod_or_fail(path, 0o600)
         token = path.read_text(encoding="utf-8").strip()
         if token:
             return token
@@ -49,6 +74,7 @@ def ensure_token(home: Path, rotate: bool = False) -> str:
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(token)
+    _chmod_or_fail(path, 0o600)
     return token
 
 
@@ -369,17 +395,25 @@ def _make_handler(home: Path, db_path: Path, token: str):
             values = {item.strip().lower() for item in allowed.split(",") if item.strip()}
             return host.lower() in values
 
+        def _send_security_headers(self, content_security_policy: str) -> None:
+            headers = dict(SECURITY_HEADERS)
+            headers["Content-Security-Policy"] = content_security_policy
+            for name, value in headers.items():
+                self.send_header(name, value)
+            obs.get_logger().debug(
+                "access %s %s security_headers=%s",
+                getattr(self, "command", "-"),
+                getattr(self, "path", "-"),
+                json.dumps(headers, sort_keys=True),
+            )
+
         def _html(self, status: int, body: str, request_id: Optional[str] = None) -> None:
             encoded = body.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header(
-                "Content-Security-Policy",
-                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
-            )
+            self._send_security_headers(HTML_CONTENT_SECURITY_POLICY)
             if request_id:
                 self.send_header("X-Request-Id", request_id)
             self.end_headers()
@@ -391,7 +425,7 @@ def _make_handler(home: Path, db_path: Path, token: str):
             self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
+            self._send_security_headers(FRAME_CONTENT_SECURITY_POLICY)
             if request_id:
                 self.send_header("X-Request-Id", request_id)
             self.end_headers()
@@ -499,7 +533,7 @@ def _make_handler(home: Path, db_path: Path, token: str):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
             self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
+            self._send_security_headers(FRAME_CONTENT_SECURITY_POLICY)
             if request_id:
                 self.send_header("X-Request-Id", request_id)
             for key, value in (extra_headers or {}).items():
