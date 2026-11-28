@@ -1,8 +1,10 @@
 import io
 import json
+import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 from daythread.cli import main
 
@@ -105,6 +107,60 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(data["facts"]), 0)
         self.assertEqual(len(data["tasks"]), 0)
         self.assertEqual(len(data["runs"]), 2)
+
+    def test_ledger_verify_exits_non_zero_on_tampered_chain(self):
+        code, out, _ = run_cli(
+            [
+                "--home",
+                self.home,
+                "act",
+                "note.write",
+                "--arg",
+                "path=launch.md",
+                "--arg",
+                "content=hello",
+            ]
+        )
+        self.assertEqual(code, 0)
+        code, out, _ = run_cli(["--home", self.home, "--json", "runs", "--limit", "1"])
+        run_id = json.loads(out)[0]["id"]
+
+        # normal chain: text and --json paths both stay rc=0
+        code, out, _ = run_cli(["--home", self.home, "ledger", run_id, "--verify"])
+        self.assertEqual(code, 0)
+        self.assertIn("ledger OK", out)
+        code, out, _ = run_cli(
+            ["--home", self.home, "--json", "ledger", run_id, "--verify"]
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(out)["ok"])
+
+        db_path = Path(self.home) / "daythread.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "UPDATE run_steps SET payload = ? WHERE run_id = ? AND seq = ("
+            "SELECT MIN(seq) FROM run_steps WHERE run_id = ?)",
+            ('{"tampered":true}', run_id, run_id),
+        )
+        conn.commit()
+        conn.close()
+
+        code, out, err = run_cli(["--home", self.home, "ledger", run_id, "--verify"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("TAMPERED", out)
+        self.assertIn("hash mismatch", out)
+        self.assertIn("error: ledger verification failed:", err)
+        self.assertNotIn("Traceback", err)
+
+        code, out, err = run_cli(
+            ["--home", self.home, "--json", "ledger", run_id, "--verify"]
+        )
+        self.assertNotEqual(code, 0)
+        data = json.loads(out)
+        self.assertFalse(data["ok"])
+        self.assertTrue(data["errors"])
+        self.assertIn("error:", err)
+        self.assertNotIn("Traceback", err)
 
     def test_policy_deny_blocks_external(self):
         code, out, _ = run_cli(
