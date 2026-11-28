@@ -39,8 +39,8 @@ def ingest_signal(
     if dedupe_key:
         window = (moment - timedelta(hours=24)).isoformat()
         existing = conn.execute(
-            "SELECT * FROM signals WHERE dedupe_key = ? AND ts >= ? ORDER BY ts DESC LIMIT 1",
-            (dedupe_key, window),
+            "SELECT * FROM signals WHERE source = ? AND kind = ? AND dedupe_key = ? AND taint = ? AND ts >= ? ORDER BY ts DESC LIMIT 1",
+            (source, kind, dedupe_key, taint, window),
         ).fetchone()
         if existing:
             item = row_to_dict(existing)

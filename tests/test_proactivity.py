@@ -30,6 +30,41 @@ class ProactivityTest(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(len(proactivity.list_signals(self.conn)), 1)
 
+    def test_signal_dedupe_is_scoped_by_source(self):
+        first = proactivity.ingest_signal(
+            self.conn, "calendar", "event", {"title": "Overlap"}, dedupe_key="k", now=NOON
+        )
+        second = proactivity.ingest_signal(
+            self.conn,
+            "tasks",
+            "event",
+            {"title": "Overlap"},
+            dedupe_key="k",
+            now=NOON,
+        )
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(first["taint"], "trusted")
+        self.assertEqual(second["taint"], "trusted")
+        self.assertEqual(len(proactivity.list_signals(self.conn)), 2)
+
+    def test_untrusted_signal_is_not_deduped_against_trusted(self):
+        trusted = proactivity.ingest_signal(
+            self.conn, "calendar", "event", {"title": "Overlap"}, dedupe_key="k", now=NOON
+        )
+        untrusted = proactivity.ingest_signal(
+            self.conn,
+            "calendar",
+            "event",
+            {"title": "Overlap"},
+            dedupe_key="k",
+            taint="untrusted",
+            now=NOON,
+        )
+        self.assertNotEqual(trusted["id"], untrusted["id"])
+        self.assertEqual(trusted["taint"], "trusted")
+        self.assertEqual(untrusted["taint"], "untrusted")
+        self.assertEqual(len(proactivity.list_signals(self.conn)), 2)
+
     def test_quiet_hours(self):
         self.assertTrue(proactivity.can_interrupt(self.conn, NOON))
         self.assertFalse(proactivity.can_interrupt(self.conn, NIGHT))
