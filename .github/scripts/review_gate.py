@@ -153,29 +153,13 @@ def _first_non_empty_line(stripped: str) -> str:
     return ""
 
 
-def parse_verdict(body: str) -> str | None:
-    match = VERDICT_RE.search(strip_noise(body))
-    return match.group(1).upper() if match else None
+def bound_verdict(body: str, head: str, *, require_sha: bool) -> str | None:
+    """First verdict with an optional full-head SHA binding.
 
-
-def head_bound_verdict(body: str, head: str) -> str | None:
-    """Issue comments: the SHA after the verdict phrase must be the full head."""
-    stripped = strip_noise(body)
-    match = VERDICT_RE.search(stripped)
-    if not match:
-        return None
-    verdict = match.group(1).upper()
-    _, after = _verdict_context(stripped, match)
-    sha = _sha_after(after)
-    if sha is None:
-        return None
-    if len(sha) == 40 and sha.lower() == head.lower():
-        return verdict
-    return None
-
-
-def review_verdict(body: str, head: str) -> str | None:
-    """COMMENTED reviews: bind a present SHA; no-SHA only on the first line."""
+    A SHA right after the phrase must be the full 40-char head. A verdict with
+    no SHA is accepted only when ``require_sha`` is false and the verdict line
+    is the first non-empty line of the stripped body.
+    """
     stripped = strip_noise(body)
     match = VERDICT_RE.search(stripped)
     if not match:
@@ -187,12 +171,9 @@ def review_verdict(body: str, head: str) -> str | None:
         if len(sha) == 40 and sha.lower() == head.lower():
             return verdict
         return None
+    if require_sha:
+        return None
     return verdict if line == _first_non_empty_line(stripped) else None
-
-
-def references_head(body: str, head: str) -> bool:
-    """Full-SHA containment only; prefix matching was the #46 bypass."""
-    return head.lower() in (body or "").lower()
 
 
 def is_docs_only(paths: list[str]) -> bool:
@@ -266,7 +247,9 @@ def newest_verdict(pull: dict[str, Any], reviewer: str) -> tuple[bool | None, st
         elif state == "CHANGES_REQUESTED":
             verdicts.append((stamp, "REQUEST_CHANGES", "changes-requested review"))
         elif state == "COMMENTED":
-            verdict = review_verdict(str(review.get("body") or ""), head)
+            verdict = bound_verdict(
+                str(review.get("body") or ""), head, require_sha=False
+            )
             if verdict:
                 verdicts.append((stamp, verdict, "review comment"))
 
@@ -275,7 +258,7 @@ def newest_verdict(pull: dict[str, Any], reviewer: str) -> tuple[bool | None, st
         if str(comment.get("user", {}).get("login", "")) != reviewer:
             continue
         body = str(comment.get("body") or "")
-        verdict = head_bound_verdict(body, head)
+        verdict = bound_verdict(body, head, require_sha=True)
         if verdict:
             verdicts.append(
                 (str(comment.get("created_at") or ""), verdict, "pull request comment")
@@ -285,7 +268,9 @@ def newest_verdict(pull: dict[str, Any], reviewer: str) -> tuple[bool | None, st
     for comment in commit_comments:
         if str(comment.get("user", {}).get("login", "")) != reviewer:
             continue
-        verdict = review_verdict(str(comment.get("body") or ""), head)
+        verdict = bound_verdict(
+            str(comment.get("body") or ""), head, require_sha=False
+        )
         if verdict:
             verdicts.append(
                 (str(comment.get("created_at") or ""), verdict, "commit comment")

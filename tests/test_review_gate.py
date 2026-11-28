@@ -300,6 +300,11 @@ class ReviewGateTest(unittest.TestCase):
         )
         self.assertEqual(review_gate.parse_verdict("Verdict: PASS"), "PASS")
 
+    def test_inline_and_quoted_verdict_forms_are_already_non_parsing(self):
+        old = "b" * 40
+        self.assertIsNone(review_gate.parse_verdict("Earlier: Verdict: PASS at " + old))
+        self.assertIsNone(review_gate.parse_verdict("> Verdict: PASS at " + old))
+
 
 if __name__ == "__main__":
     unittest.main()
