@@ -65,13 +65,35 @@ def ensure_token(home: Path, rotate: bool = False) -> str:
     home.mkdir(parents=True, exist_ok=True)
     _chmod_or_fail(home, 0o700)
     path = home / "api_token"
+    if path.is_symlink():
+        raise RuntimeError(
+            "refusing to start: {} is a symlink; remove it and let dt serve create a real "
+            "0600 token file. Fix: rm {}".format(path, shlex.quote(str(path)))
+        )
     if path.exists() and not rotate:
         _chmod_or_fail(path, 0o600)
         token = path.read_text(encoding="utf-8").strip()
         if token:
             return token
     token = secrets.token_urlsafe(32)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(str(path), flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError(
+            "refusing to start: cannot open {} safely (symlink or permissions): {}. "
+            "Fix: rm {}".format(path, exc, shlex.quote(str(path)))
+        ) from exc
+    fchmod = getattr(os, "fchmod", None)
+    if fchmod is not None:
+        try:
+            fchmod(fd, 0o600)
+        except OSError as exc:
+            os.close(fd)
+            raise RuntimeError(
+                "refusing to start: cannot secure {} before writing the token: {}. "
+                "Fix: rm {}".format(path, exc, shlex.quote(str(path)))
+            ) from exc
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(token)
     _chmod_or_fail(path, 0o600)

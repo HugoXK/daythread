@@ -462,7 +462,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         init_db(conn)
         _dispatch(args, conn, home, db_path)
-    except (DaythreadError, KeyError, ValueError) as exc:
+    except (DaythreadError, KeyError, ValueError, RuntimeError) as exc:
         message = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
         print("error: {}".format(message), file=sys.stderr)
         return 1
