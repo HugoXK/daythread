@@ -44,7 +44,7 @@ from . import (
 )
 from .crypto import SecretVault
 from .db import connect, get_setting, init_db, set_setting
-from .errors import DaythreadError
+from .errors import BenchError, DaythreadError
 from .ledger import get_steps, verify_run
 from .server import ApiServer, ensure_token
 
@@ -1358,10 +1358,21 @@ def _bench(args: argparse.Namespace) -> None:
             conn.close()
     if args.as_json:
         _print_json(results)
-        return
-    print("Daythread Bench v0")
-    for key in sorted(results):
-        print("  {:<36} {}".format(key, results[key]))
+    else:
+        print("Daythread Bench v0")
+        for key in sorted(results):
+            print("  {:<36} {}".format(key, results[key]))
+    if not results.get("safety_pass"):
+        failed = [
+            case["name"]
+            for case in results.get("safety_cases", [])
+            if not case.get("pass")
+        ]
+        raise BenchError(
+            "bench safety failed: {}".format(
+                ", ".join(failed) or "one or more safety checks"
+            )
+        )
 
 
 def _secret(args: argparse.Namespace, conn, home: Path) -> None:

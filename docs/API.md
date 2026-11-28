@@ -37,6 +37,7 @@ written.
 | GET/POST | `/v1/runs` | list/propose (`taint`, `force_approval`, `Idempotency-Key`) |
 | GET | `/v1/runs/{id}` | run + steps |
 | GET | `/v1/runs/{id}/ledger` | hash-chained steps |
+| GET | `/v1/runs/{id}/receipt` | JSON receipt (CLI `--json` source) + `verified` boolean |
 | POST | `/v1/runs/{id}/approve|reject|undo|resume|cancel` | run actions |
 | GET | `/v1/candidates?status=new` | proactive candidates |
 | POST | `/v1/feedback` | accept/ignore/mute |
@@ -51,6 +52,18 @@ written.
 | GET | `/metrics` | Prometheus text |
 | GET | `/ui` | loopback dashboard |
 | POST | `/v1/webhooks/{source}` | signed webhook ingestion |
+
+`GET /v1/runs/{id}/receipt` is read-only and loopback-only like every other
+`/v1` route: the bearer token and the Host allowlist are checked before routing.
+The body is `{"receipt": <the same document as dt receipt <id> --json>,
+"verified": bool}`. `verified` means exactly two computations passed: the
+receipt is self-consistent (canonical digest and step hash links), **and** the
+live ledger's hash chain verifies right now. It is not a claim that the recorded
+actions were truthful, that the receipt is authentic, or that it proves
+anything to a third party - authenticity and remote trust are out of scope.
+Unknown runs return `404`,
+unfinished runs `400`, and error bodies carry no home path or traceback.
+`X-Request-Id` is echoed.
 
 ## Errors
 

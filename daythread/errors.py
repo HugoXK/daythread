@@ -44,3 +44,10 @@ class BackupError(DaythreadError):
 class McpError(DaythreadError):
     code = "mcp_error"
     status = 502
+
+
+class BenchError(DaythreadError):
+    """Bench safety cases failed: a user-facing, fail-closed bench result."""
+
+    code = "bench_error"
+    status = 500

@@ -40,6 +40,7 @@ class TokenPermissionTest(unittest.TestCase):
 
     def test_serve_fails_closed_when_token_chmod_fails(self):
         token_path = self.home / "api_token"
+        token_path.write_text("pre-existing-token", encoding="utf-8")
         real_chmod = os.chmod
 
         def fake_chmod(path, mode):
@@ -120,6 +121,7 @@ class TokenPermissionTest(unittest.TestCase):
         home = Path(self.tmp.name) / "home with space"
         home.mkdir()
         token_path = home / "api_token"
+        token_path.write_text("pre-existing-token", encoding="utf-8")
         real_chmod = os.chmod
 
         def fake_chmod(path, mode):

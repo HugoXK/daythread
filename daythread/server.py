@@ -28,6 +28,7 @@ from . import (
     models,
     obs,
     proactivity,
+    receipt,
     runtime,
     scheduler,
     ui,
@@ -101,7 +102,7 @@ def _write_token_atomically(home: Path, path: Path, token: str) -> None:
                 path, exc, shlex.quote(str(home))
             )
         ) from exc
-    _chmod_or_fail(path, 0o600)
+    # The temp file was already opened 0600; os.replace keeps that mode.
 
 
 def ensure_token(home: Path, rotate: bool = False) -> str:
@@ -133,6 +134,8 @@ def ensure_token(home: Path, rotate: bool = False) -> str:
         token = path.read_text(encoding="utf-8").strip()
         if token:
             return token
+    if path.exists():
+        _chmod_or_fail(path, 0o600)
     token = secrets.token_urlsafe(32)
     _write_token_atomically(home, path, token)
     return token
@@ -348,6 +351,16 @@ def _make_handler(home: Path, db_path: Path, token: str):
                     from .ledger import get_steps
 
                     return 200, get_steps(conn, run_id)
+                if len(parts) > 4 and parts[4] == "receipt":
+                    data = receipt.build_receipt(conn, run_id)
+                    self_check = receipt.verify_receipt(data)
+                    ledger_check = receipt.verify_against_ledger(conn, run_id)
+                    return 200, {
+                        "receipt": data,
+                        "verified": bool(
+                            self_check["ok"] and ledger_check["ok"]
+                        ),
+                    }
                 return 200, runtime.get_run(conn, run_id)
             if method == "POST" and path.startswith("/v1/runs/") and len(path.split("/")) == 5:
                 parts = path.split("/")
@@ -679,6 +692,19 @@ def _openapi() -> Dict[str, Any]:
             },
             "/v1/runs/{id}": {"get": {"summary": "Get a run"}},
             "/v1/runs/{id}/ledger": {"get": {"summary": "Get ledger steps"}},
+            "/v1/runs/{id}/receipt": {
+                "get": {
+                    "summary": "Get a verifiable run receipt",
+                    "description": (
+                        "Returns the same JSON document as `dt receipt <id> --json` "
+                        "inside a `receipt` field, plus a `verified` boolean. "
+                        "`verified` is true only when the receipt is self-consistent "
+                        "AND the live ledger hash chain verifies; it is not an "
+                        "authenticity or truthfulness attestation. Requires the "
+                        "bearer token; unknown runs return 404 and unfinished runs 400."
+                    ),
+                }
+            },
             "/v1/runs/{id}/approve": {"post": {"summary": "Approve a run"}},
             "/v1/runs/{id}/reject": {"post": {"summary": "Reject a run"}},
             "/v1/runs/{id}/undo": {"post": {"summary": "Undo a run"}},
