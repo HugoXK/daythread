@@ -952,6 +952,8 @@ def _receipt(args: argparse.Namespace, conn) -> None:
 
 
 def _verify_receipt(args: argparse.Namespace, conn) -> None:
+    if args.out or getattr(args, "as_json", False):
+        raise ValueError("receipt --verify cannot be combined with --out or --json")
     if args.input:
         path = Path(args.input).expanduser()
         try:

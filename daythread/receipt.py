@@ -331,9 +331,11 @@ def verify_receipt(data: Dict[str, Any]) -> Dict[str, Any]:
         errors.append("steps must be a list")
         steps = []
     prev = ""
+    chain_unverifiable = False
     for step in steps:
         if not isinstance(step, dict):
             errors.append("step entry is not an object")
+            chain_unverifiable = True
             continue
         seq = step.get("seq")
         missing_step = [field for field in _REQUIRED_STEP_FIELDS if field not in step]
@@ -343,8 +345,10 @@ def verify_receipt(data: Dict[str, Any]) -> Dict[str, Any]:
             )
             if first_broken_seq is None and isinstance(seq, int):
                 first_broken_seq = seq
+            chain_unverifiable = True
+            prev = step["hash"] if isinstance(step.get("hash"), str) else ""
             continue
-        if step["prev_hash"] != prev:
+        if not chain_unverifiable and step["prev_hash"] != prev:
             errors.append(
                 "step {}: prev_hash mismatch (expected {}, got {})".format(
                     seq, prev or "<empty>", step["prev_hash"]
@@ -352,24 +356,38 @@ def verify_receipt(data: Dict[str, Any]) -> Dict[str, Any]:
             )
             if first_broken_seq is None and isinstance(seq, int):
                 first_broken_seq = seq
+            chain_unverifiable = True
         if not _is_sha256(step["hash"]):
             errors.append("step {}: hash is not a sha256 hex digest".format(seq))
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
+            chain_unverifiable = True
         first_step = step is steps[0]
         if not _is_sha256(step["prev_hash"]) and not (first_step and step["prev_hash"] == ""):
             errors.append(
                 "step {}: prev_hash is not a sha256 hex digest".format(seq)
             )
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
         if not _is_sha256(step["payload_digest"]):
             errors.append(
                 "step {}: payload_digest is not a sha256 hex digest".format(seq)
             )
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
         prev = step["hash"]
     if data.get("chain_head") != prev:
-        errors.append(
-            "chain_head mismatch (expected {}, got {})".format(
-                prev or "<empty>", data.get("chain_head")
-            )
+        message = "chain_head mismatch (expected {}, got {})".format(
+            prev or "<empty>", data.get("chain_head")
         )
+        if steps:
+            last = steps[-1]
+            last_seq = last.get("seq") if isinstance(last, dict) else None
+            if isinstance(last_seq, int):
+                message += " at step {}".format(last_seq)
+                if first_broken_seq is None:
+                    first_broken_seq = last_seq
+        errors.append(message)
     if "digest" in data:
         body = dict(data)
         body.pop("digest", None)

@@ -59,7 +59,10 @@ so it surfaces as a document-level `digest mismatch`. With a run id,
 `dt receipt <id> --verify` additionally reconciles against `ledger.verify_run()`,
 so a payload or hash edited in the local database is reported at its `seq`.
 Missing fields, a bad version, or unreadable JSON exit 1 with `error: …` and no
-traceback. `dt ledger <id> --verify` is unchanged.
+traceback. A broken link, a malformed `hash`, or a `chain_head` that no longer
+matches the last step all report `first broken step: <seq>`. `--verify` cannot
+be combined with `--out` or `--json` (it exits 1). `dt ledger <id> --verify` is
+unchanged.
 
 The Markdown form lists the full `hash` and `prev_hash` of every step (the JSON
 form is authoritative for tooling) and includes an `## Approvals` section with

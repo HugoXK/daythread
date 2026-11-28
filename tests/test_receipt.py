@@ -490,6 +490,32 @@ class ReceiptVerifyTest(unittest.TestCase):
         self.assertTrue(receipt.verify_receipt(receipt.build_receipt(self.conn, self.run["id"]))["ok"])
 
 
+    def test_tampered_last_step_hash_points_at_that_step(self):
+        data = self._receipt()
+        last = data["steps"][-1]
+        last["hash"] = "b" * 64
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_broken_seq"], last["seq"])
+        self.assertIn("step {}".format(last["seq"]), " ".join(result["errors"]))
+
+    def test_malformed_hash_is_located_at_its_step(self):
+        data = self._tampered(lambda item: item["steps"][1].__setitem__("hash", "zz" * 8))
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_broken_seq"], data["steps"][1]["seq"])
+        self.assertIn("hash is not a sha256", " ".join(result["errors"]))
+
+    def test_missing_field_does_not_cascade_prev_hash_errors(self):
+        data = self._tampered(lambda item: item["steps"][1].pop("kind"))
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_broken_seq"], data["steps"][1]["seq"])
+        cascaded = [
+            error for error in result["errors"] if "prev_hash mismatch" in error
+        ]
+        self.assertEqual(cascaded, [])
+
 class ReceiptVerifyCliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -566,6 +592,16 @@ class ReceiptVerifyCliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("version", (out + err).lower())
         self.assertNotIn("Traceback", err)
+
+    def test_cli_verify_rejects_out_and_json(self):
+        out_path = self.home / "out.json"
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", self.run["id"], "--verify", "--out", str(out_path)]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("cannot be combined", err)
+        self.assertNotIn("Traceback", err)
+        self.assertFalse(out_path.exists())
 
     def test_cli_verify_missing_input_file(self):
         code, out, err = run_cli(
