@@ -455,10 +455,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _refuse_symlinked_home(raw_home: str) -> None:
+    """Refuse a symlinked --home before resolve() can follow it.
+
+    ``server.ensure_token()`` refuses a symlinked home as well, but ``main()``
+    resolves the path first, so dt serve / dt ui would otherwise hand the
+    server a real directory and silently bypass that guard.
+    """
+    candidate = Path(raw_home).expanduser()
+    if candidate.is_symlink():
+        raise ValueError(
+            "refusing --home symlink: {}; remove it with: rm {}".format(
+                candidate, shlex.quote(str(candidate))
+            )
+        )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.cmd in ("serve", "ui"):
+        try:
+            _refuse_symlinked_home(args.home)
+        except ValueError as exc:
+            print("error: {}".format(exc), file=sys.stderr)
+            return 1
     home = Path(args.home).expanduser().resolve()
     home.mkdir(parents=True, exist_ok=True)
     db_path = Path(args.db).expanduser().resolve() if args.db else home / "daythread.db"
