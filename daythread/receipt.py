@@ -34,6 +34,7 @@ any receipt left the repository, so no released consumer sees a change.
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 import sqlite3
 from typing import Any, Dict, List, Optional
@@ -283,3 +284,131 @@ def to_markdown(data: Dict[str, Any]) -> str:
         lines.append("- command: none (irreversible)")
     lines.append("")
     return "\n".join(lines)
+
+
+_HEX_DIGITS = set("0123456789abcdef")
+_STEP_ERROR = re.compile(r"step (\d+):")
+_REQUIRED_FIELDS = ("version", "run", "steps", "chain_head", "policy", "undo", "digest")
+_REQUIRED_STEP_FIELDS = ("seq", "kind", "hash", "prev_hash", "payload_digest")
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in _HEX_DIGITS for char in value)
+    )
+
+
+def verify_receipt(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Recompute a receipt's own integrity, strictly from the receipt itself.
+
+    The receipt carries no payload (privacy), so a tampered ``payload_digest``
+    is caught as a document-level ``digest`` mismatch, while a broken
+    ``prev_hash`` link is located at its exact ``seq``. Step-level payload
+    tampering in the local ledger is located by
+    :func:`verify_against_ledger` instead.
+    """
+    errors: List[str] = []
+    first_broken_seq: Optional[int] = None
+    if not isinstance(data, dict):
+        return {
+            "ok": False,
+            "errors": ["receipt must be a JSON object"],
+            "first_broken_seq": None,
+        }
+    missing = [field for field in _REQUIRED_FIELDS if field not in data]
+    if missing:
+        errors.append("missing field(s): {}".format(", ".join(missing)))
+    if data.get("version") != VERSION:
+        errors.append(
+            "unsupported receipt version: {} (expected {})".format(
+                data.get("version"), VERSION
+            )
+        )
+    steps = data.get("steps")
+    if not isinstance(steps, list):
+        errors.append("steps must be a list")
+        steps = []
+    prev = ""
+    chain_unverifiable = False
+    for step in steps:
+        if not isinstance(step, dict):
+            errors.append("step entry is not an object")
+            chain_unverifiable = True
+            continue
+        seq = step.get("seq")
+        missing_step = [field for field in _REQUIRED_STEP_FIELDS if field not in step]
+        if missing_step:
+            errors.append(
+                "step {}: missing field(s): {}".format(seq, ", ".join(missing_step))
+            )
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
+            chain_unverifiable = True
+            prev = step["hash"] if isinstance(step.get("hash"), str) else ""
+            continue
+        if not chain_unverifiable and step["prev_hash"] != prev:
+            errors.append(
+                "step {}: prev_hash mismatch (expected {}, got {})".format(
+                    seq, prev or "<empty>", step["prev_hash"]
+                )
+            )
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
+            chain_unverifiable = True
+        if not _is_sha256(step["hash"]):
+            errors.append("step {}: hash is not a sha256 hex digest".format(seq))
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
+            chain_unverifiable = True
+        first_step = step is steps[0]
+        if not _is_sha256(step["prev_hash"]) and not (first_step and step["prev_hash"] == ""):
+            errors.append(
+                "step {}: prev_hash is not a sha256 hex digest".format(seq)
+            )
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
+        if not _is_sha256(step["payload_digest"]):
+            errors.append(
+                "step {}: payload_digest is not a sha256 hex digest".format(seq)
+            )
+            if first_broken_seq is None and isinstance(seq, int):
+                first_broken_seq = seq
+        prev = step["hash"]
+    if data.get("chain_head") != prev:
+        message = "chain_head mismatch (expected {}, got {})".format(
+            prev or "<empty>", data.get("chain_head")
+        )
+        if steps:
+            last = steps[-1]
+            last_seq = last.get("seq") if isinstance(last, dict) else None
+            if isinstance(last_seq, int):
+                message += " at step {}".format(last_seq)
+                if first_broken_seq is None:
+                    first_broken_seq = last_seq
+        errors.append(message)
+    if "digest" in data:
+        body = dict(data)
+        body.pop("digest", None)
+        expected = _sha256(canonical(body))
+        if data.get("digest") != expected:
+            errors.append(
+                "digest mismatch: receipt body was modified (recorded {}, expected {})".format(
+                    data.get("digest"), expected
+                )
+            )
+    return {"ok": not errors, "errors": errors, "first_broken_seq": first_broken_seq}
+
+
+def verify_against_ledger(conn: sqlite3.Connection, run_id: str) -> Dict[str, Any]:
+    """Recompute the live ledger chain and locate the first broken step."""
+    from .ledger import verify_run
+
+    ok, errors = verify_run(conn, run_id)
+    first_broken_seq: Optional[int] = None
+    for message in errors:
+        match = _STEP_ERROR.search(message)
+        if match and first_broken_seq is None:
+            first_broken_seq = int(match.group(1))
+    return {"ok": ok, "errors": list(errors), "first_broken_seq": first_broken_seq}

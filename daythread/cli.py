@@ -181,11 +181,15 @@ def build_parser() -> argparse.ArgumentParser:
     ledger.add_argument("run_id")
     ledger.add_argument("--verify", action="store_true")
 
-    receipt_p = sub.add_parser("receipt", help="export a verifiable receipt for a finished run")
-    receipt_p.add_argument("run_id")
+    receipt_p = sub.add_parser("receipt", help="export or verify a run receipt")
+    receipt_p.add_argument("run_id", nargs="?")
     receipt_p.add_argument("--json", action="store_true", dest="as_json", default=argparse.SUPPRESS,
                            help="machine-readable JSON instead of Markdown")
     receipt_p.add_argument("--out", default=None, metavar="PATH", help="write the receipt to PATH")
+    receipt_p.add_argument("--verify", action="store_true",
+                           help="recompute the receipt chain and exit non-zero on tampering")
+    receipt_p.add_argument("--input", default=None, metavar="PATH",
+                           help="verify an exported receipt file instead of a local run")
 
     pol = sub.add_parser("policy", help="show or change risk policy")
     pol_sub = pol.add_subparsers(dest="policy_cmd", required=True)
@@ -932,6 +936,11 @@ def _ledger(args: argparse.Namespace, conn) -> None:
 
 
 def _receipt(args: argparse.Namespace, conn) -> None:
+    if args.verify:
+        _verify_receipt(args, conn)
+        return
+    if not args.run_id:
+        raise ValueError("receipt needs a run id (or --input PATH --verify)")
     data = receipt.build_receipt(conn, args.run_id)
     text = receipt.to_json(data) if args.as_json else receipt.to_markdown(data)
     print(text)
@@ -940,6 +949,39 @@ def _receipt(args: argparse.Namespace, conn) -> None:
             Path(args.out).expanduser().write_text(text + "\n", encoding="utf-8")
         except OSError as exc:
             raise ValueError("cannot write receipt: {}".format(exc))
+
+
+def _verify_receipt(args: argparse.Namespace, conn) -> None:
+    if args.out or getattr(args, "as_json", False):
+        raise ValueError("receipt --verify cannot be combined with --out or --json")
+    if args.input:
+        path = Path(args.input).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError("cannot read receipt: {}".format(exc))
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ValueError("receipt is not valid JSON: {}".format(exc))
+        result = receipt.verify_receipt(data)
+    else:
+        if not args.run_id:
+            raise ValueError("receipt --verify needs a run id or --input PATH")
+        data = receipt.build_receipt(conn, args.run_id)
+        result = receipt.verify_receipt(data)
+        if result["ok"]:
+            ledger_result = receipt.verify_against_ledger(conn, args.run_id)
+            if not ledger_result["ok"]:
+                result = ledger_result
+    if not result["ok"]:
+        print("verified: false")
+        if result.get("first_broken_seq") is not None:
+            print("first broken step: {}".format(result["first_broken_seq"]))
+        raise ValueError(
+            "receipt verification failed: {}".format("; ".join(result["errors"][:3]))
+        )
+    print("verified: true")
 
 
 def _policy(args: argparse.Namespace, conn) -> None:
