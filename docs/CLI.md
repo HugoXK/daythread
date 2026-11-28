@@ -50,19 +50,31 @@ and writing `--out` never changes run state. Unfinished runs (`pending_approval`
 `running`, ...) and unknown ids exit non-zero instead of producing a partial
 receipt. The ledger remains authoritative: `dt ledger <id> --verify`.
 
-`--verify` recomputes the receipt itself, never the database: it checks the
-embedded `digest` over the canonical body, every `prev_hash` link, and
-`chain_head`. Tampering in an exported file exits non-zero, prints
-`verified: false`, and names the first broken step (`first broken step: <seq>`)
-when the break is a link; a tampered `payload_digest` has no payload to re-hash,
-so it surfaces as a document-level `digest mismatch`. With a run id,
-`dt receipt <id> --verify` additionally reconciles against `ledger.verify_run()`,
-so a payload or hash edited in the local database is reported at its `seq`.
+`--verify` checks a receipt's **internal consistency**, not its authenticity.
+The `digest` is an unkeyed SHA-256 over the canonical body, so anyone who edits
+a field (including a `payload_digest`) and recomputes the digest produces a
+receipt that still verifies. Concretely it recomputes the embedded `digest`,
+every `prev_hash` link and `chain_head`; tampering that leaves those structures
+inconsistent exits non-zero, prints `verified: false`, and names the first
+broken step (`first broken step: <seq>`) when the break is a link. A tampered
+`payload_digest` with a recomputed digest is indistinguishable from a genuine
+one at this layer: the exported file carries no payload and no signature.
+
+Authenticity requires reconciliation against the live ledger:
+`dt ledger <run-id> --verify` recomputes the append-only chain from `run_steps`
+and reports `OK` or `TAMPERED`. With a run id, `dt receipt <id> --verify` runs
+that same reconciliation in addition to the self-check, so a payload or hash
+edited in the local database is reported at its `seq`. That check is only as
+strong as the local database and its file permissions: it detects edits to the
+ledger, not an attacker who rewrites both the ledger and the exported receipt,
+and it says nothing about another machine's copy. There is no signing, keyed
+digest, or remote attestation; do not present a receipt as tamper-proof.
+
 Missing fields, a bad version, or unreadable JSON exit 1 with `error: …` and no
 traceback. A broken link, a malformed `hash`, or a `chain_head` that no longer
 matches the last step all report `first broken step: <seq>`. `--verify` cannot
 be combined with `--out` or `--json` (it exits 1). `dt ledger <id> --verify` is
-unchanged.
+otherwise unchanged.
 
 The Markdown form lists the full `hash` and `prev_hash` of every step (the JSON
 form is authoritative for tooling) and includes an `## Approvals` section with
