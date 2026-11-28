@@ -402,3 +402,198 @@ class ReceiptCliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReceiptVerifyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.conn = connect(self.home / "daythread.db")
+        init_db(self.conn)
+        self.run = runtime.propose(
+            self.conn,
+            self.home,
+            "note.write",
+            {"path": "launch.md", "content": "hello"},
+            intent="verify test",
+        )
+        self.steps = get_steps(self.conn, self.run["id"])
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _receipt(self):
+        return receipt.build_receipt(self.conn, self.run["id"])
+
+    def _tampered(self, mutate):
+        data = json.loads(receipt.to_json(self._receipt()))
+        mutate(data)
+        return data
+
+    def test_clean_receipt_verifies(self):
+        result = receipt.verify_receipt(self._receipt())
+        self.assertTrue(result["ok"], result["errors"])
+        self.assertEqual(result["errors"], [])
+        self.assertIsNone(result["first_broken_seq"])
+
+    def test_missing_digest_is_rejected(self):
+        data = self._receipt()
+        data.pop("digest")
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertIn("digest", " ".join(result["errors"]).lower())
+
+    def test_version_mismatch_is_rejected(self):
+        data = self._receipt()
+        data["version"] = 99
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertIn("version", " ".join(result["errors"]).lower())
+
+    def test_missing_step_field_is_rejected(self):
+        data = self._tampered(lambda item: item["steps"][1].pop("prev_hash"))
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertIn("prev_hash", " ".join(result["errors"]))
+
+    def test_tampered_payload_digest_breaks_digest(self):
+        data = self._tampered(lambda item: item["steps"][2].__setitem__("payload_digest", "0" * 64))
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertIn("digest", " ".join(result["errors"]).lower())
+
+    def test_tampered_prev_hash_points_at_first_broken_step(self):
+        data = self._tampered(lambda item: item["steps"][2].__setitem__("prev_hash", "f" * 64))
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_broken_seq"], data["steps"][2]["seq"])
+
+    def test_tampered_chain_head_is_rejected(self):
+        data = self._receipt()
+        data["chain_head"] = "0" * 64
+        result = receipt.verify_receipt(data)
+        self.assertFalse(result["ok"])
+        self.assertIn("chain_head", " ".join(result["errors"]))
+
+    def test_tampered_ledger_payload_is_located_by_seq(self):
+        executed = [step for step in self.steps if step["kind"] == "executed"][0]
+        self.conn.execute(
+            "UPDATE run_steps SET payload = ? WHERE run_id = ? AND seq = ?",
+            ('{"tampered":true}', self.run["id"], executed["seq"]),
+        )
+        self.conn.commit()
+        result = receipt.verify_against_ledger(self.conn, self.run["id"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["first_broken_seq"], executed["seq"])
+        # The exported receipt itself is still internally consistent.
+        self.assertTrue(receipt.verify_receipt(receipt.build_receipt(self.conn, self.run["id"]))["ok"])
+
+
+class ReceiptVerifyCliTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+        self.conn = connect(self.home / "daythread.db")
+        init_db(self.conn)
+        self.run = runtime.propose(
+            self.conn,
+            self.home,
+            "note.write",
+            {"path": "launch.md", "content": "hello"},
+            intent="verify cli",
+        )
+        self.receipt_path = self.home / "receipt.json"
+        self.conn.close()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_receipt(self):
+        conn = connect(self.home / "daythread.db")
+        try:
+            data = receipt.build_receipt(conn, self.run["id"])
+        finally:
+            conn.close()
+        self.receipt_path.write_text(receipt.to_json(data) + "\n", encoding="utf-8")
+        return data
+
+    def test_cli_verify_clean_run(self):
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", self.run["id"], "--verify"]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("verified: true", out)
+
+    def test_cli_verify_input_file(self):
+        self._write_receipt()
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", "--input", str(self.receipt_path), "--verify"]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("verified: true", out)
+
+    def test_cli_verify_input_file_tampered_prev_hash(self):
+        data = self._write_receipt()
+        data["steps"][2]["prev_hash"] = "f" * 64
+        self.receipt_path.write_text(receipt.to_json(data) + "\n", encoding="utf-8")
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", "--input", str(self.receipt_path), "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("verified: false", out)
+        self.assertIn("first broken step: {}".format(data["steps"][2]["seq"]), out + err)
+        self.assertNotIn("Traceback", err)
+
+    def test_cli_verify_input_file_missing_field(self):
+        data = self._write_receipt()
+        data.pop("digest")
+        self.receipt_path.write_text(receipt.to_json(data) + "\n", encoding="utf-8")
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", "--input", str(self.receipt_path), "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("verified: false", out)
+        self.assertNotIn("Traceback", err)
+
+    def test_cli_verify_version_mismatch(self):
+        data = self._write_receipt()
+        data["version"] = 99
+        self.receipt_path.write_text(receipt.to_json(data) + "\n", encoding="utf-8")
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", "--input", str(self.receipt_path), "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("version", (out + err).lower())
+        self.assertNotIn("Traceback", err)
+
+    def test_cli_verify_missing_input_file(self):
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", "--input", str(self.home / "nope.json"), "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("error:", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_cli_verify_tampered_ledger_exits_nonzero(self):
+        conn = connect(self.home / "daythread.db")
+        try:
+            step = [
+                item
+                for item in get_steps(conn, self.run["id"])
+                if item["kind"] == "executed"
+            ][0]
+            conn.execute(
+                "UPDATE run_steps SET payload = ? WHERE run_id = ? AND seq = ?",
+                ('{"tampered":true}', self.run["id"], step["seq"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        code, out, err = run_cli(
+            ["--home", str(self.home), "receipt", self.run["id"], "--verify"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("verified: false", out)
+        self.assertIn("first broken step: {}".format(step["seq"]), out + err)
+        self.assertNotIn("Traceback", err)

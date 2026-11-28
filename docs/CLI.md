@@ -34,6 +34,7 @@ dt plan "<intent>" [--execute] [--file plan.json] [--taint untrusted]
 dt act <tool> --arg k=v [--taint untrusted]
 dt runs | show <id> | ledger <id> --verify
 dt receipt <id> [--json] [--out PATH]   # finished runs only; Markdown by default
+dt receipt <id> --verify | dt receipt --input FILE --verify  # recompute and check
 dt approve <id> | reject <id> | undo <id> | resume <id> | cancel <id>
 dt policy show | set <risk> <allow|ask|deny>
 ```
@@ -48,6 +49,17 @@ same bytes to a file. It is read-only: no table is written, no migration runs,
 and writing `--out` never changes run state. Unfinished runs (`pending_approval`,
 `running`, ...) and unknown ids exit non-zero instead of producing a partial
 receipt. The ledger remains authoritative: `dt ledger <id> --verify`.
+
+`--verify` recomputes the receipt itself, never the database: it checks the
+embedded `digest` over the canonical body, every `prev_hash` link, and
+`chain_head`. Tampering in an exported file exits non-zero, prints
+`verified: false`, and names the first broken step (`first broken step: <seq>`)
+when the break is a link; a tampered `payload_digest` has no payload to re-hash,
+so it surfaces as a document-level `digest mismatch`. With a run id,
+`dt receipt <id> --verify` additionally reconciles against `ledger.verify_run()`,
+so a payload or hash edited in the local database is reported at its `seq`.
+Missing fields, a bad version, or unreadable JSON exit 1 with `error: …` and no
+traceback. `dt ledger <id> --verify` is unchanged.
 
 The Markdown form lists the full `hash` and `prev_hash` of every step (the JSON
 form is authoritative for tooling) and includes an `## Approvals` section with
