@@ -56,8 +56,12 @@ written.
 `GET /v1/runs/{id}/receipt` is read-only and loopback-only like every other
 `/v1` route: the bearer token and the Host allowlist are checked before routing.
 The body is `{"receipt": <the same document as dt receipt <id> --json>,
-"verified": bool}`; `verified` is true only when the receipt self-checks and
-still matches the live hash-chained ledger. Unknown runs return `404`,
+"verified": bool}`. `verified` means exactly two computations passed: the
+receipt is self-consistent (canonical digest and step hash links), **and** the
+live ledger's hash chain verifies right now. It is not a claim that the recorded
+actions were truthful, that the receipt is authentic, or that it proves
+anything to a third party - authenticity and remote trust are out of scope.
+Unknown runs return `404`,
 unfinished runs `400`, and error bodies carry no home path or traceback.
 `X-Request-Id` is echoed.
 

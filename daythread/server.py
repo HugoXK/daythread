@@ -657,8 +657,10 @@ def _openapi() -> Dict[str, Any]:
                     "summary": "Get a verifiable run receipt",
                     "description": (
                         "Returns the same JSON document as `dt receipt <id> --json` "
-                        "inside a `receipt` field, plus a `verified` boolean that "
-                        "checks the receipt against the live ledger. Requires the "
+                        "inside a `receipt` field, plus a `verified` boolean. "
+                        "`verified` is true only when the receipt is self-consistent "
+                        "AND the live ledger hash chain verifies; it is not an "
+                        "authenticity or truthfulness attestation. Requires the "
                         "bearer token; unknown runs return 404 and unfinished runs 400."
                     ),
                 }
