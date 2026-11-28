@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from . import obs, planner, policy, sandbox
 from .db import canonical, get_setting, json_load, row_to_dict, utc_now
+from .errors import LeaseLostError, UncertainOutcomeError
 from .ledger import append_step, get_steps, verify_run
 from .tools import ToolContext, ToolResult, apply_undo, get_tool
 
@@ -77,7 +78,7 @@ def _heartbeat(conn: sqlite3.Connection, run_id: str, owner: str) -> None:
     )
     conn.commit()
     if cursor.rowcount != 1:
-        raise RuntimeError("run lease lost for {}".format(run_id))
+        raise LeaseLostError("run lease lost for {}".format(run_id))
 
 
 def _release_lease(conn: sqlite3.Connection, run_id: str) -> None:
@@ -492,6 +493,11 @@ def execute_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, 
         try:
             _execute_step(conn, home, run, step, single, budget)
             _heartbeat(conn, run_id, owner)
+        except LeaseLostError:
+            raise
+        except UncertainOutcomeError as exc:
+            _fail_run(conn, run_id, "{}: {}".format(type(exc).__name__, exc))
+            raise
         except Exception as exc:  # noqa: BLE001 - record and stop the run
             return _fail_run(conn, run_id, "{}: {}".format(type(exc).__name__, exc))
         completed.add(step["id"])
@@ -542,7 +548,7 @@ def _execute_step(
         )
         return
     if existing and not spec.idempotent and existing["status"] in ("started", "failed"):
-        raise RuntimeError(
+        raise UncertainOutcomeError(
             "step {} has an uncertain external outcome; review before resume".format(step["id"])
         )
 

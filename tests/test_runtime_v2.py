@@ -234,6 +234,60 @@ class RuntimeV2Test(unittest.TestCase):
         cancelled = runtime.cancel_run(self.conn, run["id"])
         self.assertEqual(cancelled["state"], "cancelled")
 
+    def test_lease_lost_raises_specific_conflict(self):
+        from daythread.errors import LeaseLostError
+
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "note.write",
+            {"path": "a.md", "content": "A"},
+        )
+        self.conn.execute(
+            "UPDATE runs SET lease_owner = ? WHERE id = ?",
+            ("owner-a", run["id"]),
+        )
+        self.conn.commit()
+        with self.assertRaises(LeaseLostError) as caught:
+            runtime._heartbeat(self.conn, run["id"], "owner-b")
+        self.assertEqual(caught.exception.code, "lease_lost")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(
+            str(caught.exception), "run lease lost for {}".format(run["id"])
+        )
+
+    def test_uncertain_external_outcome_raises_specific_conflict(self):
+        from daythread.errors import UncertainOutcomeError
+
+        calls = {"n": 0}
+
+        def failing(ctx, args):
+            calls["n"] += 1
+            raise TimeoutError("simulated external timeout")
+
+        TOOLS["test.uncertain"] = ToolSpec(
+            "test.uncertain", "external", "fails", failing, "test", idempotent=False
+        )
+        run = runtime.propose_plan(
+            self.conn,
+            self.home,
+            [{"id": "s1", "tool": "test.uncertain", "args": {}}],
+            force_approval=True,
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        run = runtime.approve(self.conn, self.home, run["id"])
+        self.assertEqual(run["state"], "failed")
+        self.conn.execute(
+            "UPDATE runs SET state = 'approved' WHERE id = ?", (run["id"],)
+        )
+        self.conn.commit()
+        with self.assertRaises(UncertainOutcomeError) as caught:
+            runtime.execute_run(self.conn, self.home, run["id"])
+        self.assertEqual(caught.exception.code, "uncertain_outcome")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("uncertain external outcome", str(caught.exception))
+        self.assertEqual(calls["n"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
