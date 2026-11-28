@@ -9,7 +9,7 @@ from unittest import mock
 
 from daythread import connectors, receipt, runtime, tools
 from daythread.db import connect, init_db
-from daythread.errors import ProviderError
+from daythread.errors import ProviderError, ValidationError
 from daythread.ledger import get_steps, verify_run
 
 
@@ -20,6 +20,7 @@ class FakeGoogleCalendar:
         self.events = []
         self.calls = []
         self.fail_delete = False
+        self.missing_delete = False
 
     def __call__(self, request):
         method = request.get_method()
@@ -32,6 +33,8 @@ class FakeGoogleCalendar:
         if method == "PATCH":
             return json.dumps({"id": url.rsplit("/", 1)[-1]}).encode("utf-8")
         if method == "DELETE":
+            if self.missing_delete:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
             if self.fail_delete:
                 raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
             event_id = url.rsplit("/", 1)[-1]
@@ -116,6 +119,18 @@ class UndoContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             tools._check_undo_contract({"test.irreversible": bad})
 
+    def test_registry_rejects_reason_without_irreversible_flag(self):
+        bad = tools.ToolSpec(
+            "test.reason_only",
+            "external",
+            "bad",
+            lambda ctx, args: tools.ToolResult("x"),
+            irreversible_reason="looks irreversible but is not declared",
+        )
+        with self.assertRaises(ValueError) as caught:
+            tools._check_undo_contract({"test.reason_only": bad})
+        self.assertIn("irreversible=False", str(caught.exception))
+
     def test_registry_rejects_both_undo_and_irreversible(self):
         bad = tools.ToolSpec(
             "test.both",
@@ -133,10 +148,12 @@ class UndoContractTest(unittest.TestCase):
         for spec in tools.TOOLS.values():
             if spec.risk in tools.UNDO_REQUIRED_RISKS:
                 self.assertTrue(
-                    spec.provides_undo or spec.irreversible_reason.strip(),
+                    spec.provides_undo
+                    or (spec.irreversible and spec.irreversible_reason.strip()),
                     "{} has no undo contract".format(spec.name),
                 )
             if spec.irreversible_reason:
+                self.assertTrue(spec.irreversible, spec.name)
                 self.assertIn(spec.name, tools.IRREVERSIBLE_TOOLS)
         for name, reason in tools.IRREVERSIBLE_TOOLS.items():
             self.assertIn(name, tools.TOOLS)
@@ -201,6 +218,90 @@ class UndoContractTest(unittest.TestCase):
         self.assertEqual(executed_before, executed_after)
         ok, errors = verify_run(self.conn, run["id"])
         self.assertTrue(ok, errors)
+
+    def test_undo_refuses_tampered_ledger_before_any_outbound_call(self):
+        run = self._create_event()
+        executed = [
+            step for step in get_steps(self.conn, run["id"]) if step["kind"] == "executed"
+        ][0]
+        recipe = executed["payload"]["undo"]
+        self.conn.execute(
+            "UPDATE run_steps SET payload = ? WHERE run_id = ? AND kind = 'executed'",
+            ('{"tampered":true}', run["id"]),
+        )
+        self.conn.commit()
+        self.opener.calls.clear()
+
+        with self.assertRaises(ValueError) as caught:
+            runtime.undo_run(self.conn, self.home, run["id"])
+        self.assertIn("ledger failed verification", str(caught.exception))
+        self.assertEqual(self.opener.calls, [])
+        self.assertEqual(runtime.get_run(self.conn, run["id"])["state"], "completed")
+
+        ctx = tools.ToolContext(conn=self.conn, home=self.home, run_id=run["id"])
+        with self.assertRaises(ValueError):
+            tools.apply_undo(ctx, recipe)
+        self.assertEqual(self.opener.calls, [])
+
+    def test_missing_remote_event_is_already_undone(self):
+        run = self._create_event()
+        self.opener.missing_delete = True
+        undone = runtime.undo_run(self.conn, self.home, run["id"])
+        self.assertEqual(undone["state"], "undone")
+        self.assertEqual(self.opener.deletes(), ["evt-1"])
+
+    def test_connector_handler_without_metadata_is_refused(self):
+        bad = connectors.ConnectorSpec(
+            id="test.nometa",
+            name="No metadata",
+            version="0",
+            auth="mock",
+            scopes=[],
+            actions=[],
+            sync=lambda *args, **kwargs: [],
+            action_handlers={"write": lambda *args, **kwargs: {"id": "x"}},
+        )
+        with mock.patch.dict(connectors.REGISTRY, {"test.nometa": bad}):
+            with self.assertRaises(ValueError):
+                connectors._check_action_metadata()
+            self.conn.execute(
+                "INSERT INTO connectors(id, version, status, scopes, connected_at)"
+                " VALUES('test.nometa', '0', 'connected', '[]', '2026-01-01')"
+            )
+            self.conn.commit()
+            with self.assertRaises(ValidationError):
+                connectors.call_action(
+                    self.conn, self.home, "test.nometa", "write", {}
+                )
+            self.assertEqual(self.opener.calls, [])
+
+    def test_undo_declaration_is_validated_before_the_external_write(self):
+        registry = connectors.REGISTRY["google.calendar"]
+        original = json.loads(json.dumps(registry.actions))
+        try:
+            for item in registry.actions:
+                if item.get("name") == "create_event":
+                    item["undo"] = dict(item["undo"], action="not_declared")
+            with self.assertRaises(ValidationError):
+                connectors.call_action(
+                    self.conn,
+                    self.home,
+                    "google.calendar",
+                    "create_event",
+                    {"title": "Review", "start": "2026-11-28T10:00:00Z"},
+                    opener=self.opener,
+                )
+        finally:
+            registry.actions[:] = original
+        self.assertEqual(self.opener.calls, [])
+
+    def test_shell_run_reason_describes_the_read_only_allowlist(self):
+        reason = tools.IRREVERSIBLE_TOOLS["shell.run"]
+        self.assertIn("read-only", reason)
+        self.assertIn("shell=False", reason)
+        spec = tools.get_tool("shell.run")
+        self.assertTrue(spec.irreversible)
+        self.assertTrue(spec.irreversible_reason.strip())
 
     def test_action_without_undo_recipe_is_explicitly_irreversible(self):
         result = connectors.call_action(

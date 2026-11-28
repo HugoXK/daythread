@@ -42,8 +42,11 @@ IRREVERSIBLE_TOOLS = {
         "inverse operation, so a call cannot be undone generically"
     ),
     "shell.run": (
-        "allowlisted shell command may mutate the sandbox arbitrarily; no generic "
-        "inverse exists for an opaque command"
+        "fixed read-only allowlist (echo, pwd, ls, cat, head, tail, wc, date, "
+        "whoami) run with shell=False and relative paths only; it makes no "
+        "external call and no durable write, so there is no state to restore. "
+        "The mark is a conservative declaration for a destructive-tier tool, "
+        "not a claim that it changed anything"
     ),
 }
 
@@ -544,6 +547,7 @@ def _check_undo_contract(registry: Optional[Dict[str, ToolSpec]] = None) -> None
     """
     tools = TOOLS if registry is None else registry
     for spec in tools.values():
+        reason = spec.irreversible_reason.strip()
         if spec.provides_undo and spec.irreversible:
             raise ValueError(
                 "tool {} (risk {}) declares both provides_undo and irreversible; "
@@ -555,7 +559,7 @@ def _check_undo_contract(registry: Optional[Dict[str, ToolSpec]] = None) -> None
                     "tool {} (risk {}) may only be irreversible when risk is "
                     "external or destructive".format(spec.name, spec.risk)
                 )
-            if not spec.irreversible_reason.strip():
+            if not reason:
                 raise ValueError(
                     "tool {} (risk {}) is irreversible without irreversible_reason".format(
                         spec.name, spec.risk
@@ -567,10 +571,17 @@ def _check_undo_contract(registry: Optional[Dict[str, ToolSpec]] = None) -> None
                         spec.name, spec.risk
                     )
                 )
+        elif reason:
+            raise ValueError(
+                "tool {} (risk {}) has irreversible_reason but irreversible=False; "
+                "set irreversible=True so the declaration is explicit".format(
+                    spec.name, spec.risk
+                )
+            )
         if (
             spec.risk in UNDO_REQUIRED_RISKS
             and not spec.provides_undo
-            and not spec.irreversible_reason.strip()
+            and not spec.irreversible
         ):
             raise ValueError(
                 "tool {} (risk {}) needs an undo contract: set provides_undo=True "
@@ -671,7 +682,15 @@ def _undo_already_applied(ctx: ToolContext, idempotency_key: str) -> bool:
 
 def _apply_connector_undo(ctx: ToolContext, undo: Dict[str, Any]) -> str:
     from . import connectors
+    from .ledger import verify_run
 
+    ok, errors = verify_run(ctx.conn, ctx.run_id)
+    if not ok:
+        raise ValueError(
+            "refusing connector undo: run {} ledger failed verification: {}".format(
+                ctx.run_id, "; ".join(errors[:3]) or "unknown error"
+            )
+        )
     kind = str(undo.get("kind", ""))
     if kind != "connector.delete":
         raise ValueError("unknown connector undo recipe: {}".format(kind))

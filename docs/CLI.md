@@ -62,6 +62,25 @@ those references. When undo is available the Markdown form ends with the exact
 `dt undo <id>` command; a run whose external writes are explicitly irreversible
 says so instead of showing an empty recipe list.
 
+`dt undo` verifies the run's hash chain before it applies anything: a tampered
+ledger is refused with `ledger failed verification` and no undo step (in
+particular no outbound connector call) is attempted. A run containing an
+explicitly irreversible step (`message.send`, `mcp.call`, `shell.run`, or a
+connector action with no declared recipe) is refused with `contains an
+irreversible step`. `shell.run` is a fixed read-only allowlist (`echo`, `pwd`,
+`ls`, `cat`, `head`, `tail`, `wc`, `date`, `whoami`) run with `shell=False` and
+relative paths only, so that refusal is a conservative registry classification,
+not a claim that the command wrote anything.
+
+When a connector action declares an undo recipe, the run's step carries
+`kind=connector.delete` plus exactly one target id, and `dt undo` deletes exactly
+that one remote object. If the provider accepted the write but returned no event
+id, the run fails closed at that step (`returned no id`), the external outcome is
+uncertain so `resume` refuses it, and the receipt has no recipe. Clean up
+manually: open the connected account's provider console (for example Google
+Calendar) with write access, find the event by its title and start time, delete
+it, then inspect `dt show <id>` / `dt ledger <id> --verify` and start a new run.
+
 `resume` refuses a failed run when a non-idempotent step may have partially
 executed (its idempotency state is `started` or `failed`). Verify the external
 side effect first, inspect `dt show <id>` / `dt ledger <id> --verify`, and start
@@ -76,6 +95,14 @@ dt connector call <id> <action> --arg k=v
 dt connector items <id>
 dt skill list | show <id> | install <file> | run <id> | uninstall <id>
 ```
+
+`dt connector call` is registered as an external tool whose spec-level fallback
+is `irreversible`: only actions that declare a per-action undo recipe (today
+`google.calendar create_event`) produce an executable `connector.delete` recipe
+and can be undone. Every other write action is marked irreversible in its step
+payload with a reason (visible as `irreversible_reason` in `dt show <id> --json`).
+A connector handler without an `actions` metadata entry fails closed at
+registration and again at call time, before the handler runs.
 
 ## Proactivity, scheduler, webhooks
 

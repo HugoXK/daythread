@@ -285,7 +285,9 @@ def _http_json(
                 delay = min(max(retry_after, HTTP_RETRY_BASE * (2 ** attempt)), 2.0)
                 time.sleep(delay)
                 continue
-            raise ProviderError("connector HTTP {}".format(exc.code))
+            error = ProviderError("connector HTTP {}".format(exc.code))
+            error.provider_status = exc.code
+            raise error
         except Exception as exc:  # noqa: BLE001 - normalized provider error
             raise ProviderError("connector request failed: {}".format(exc))
     raise ProviderError("connector request failed: {}".format(last_error))
@@ -899,6 +901,64 @@ REGISTRY: Dict[str, ConnectorSpec] = {
 }
 
 
+def _check_action_metadata() -> None:
+    """Every action handler must declare risk/undo metadata at registration time.
+
+    A handler without an ``actions`` entry has no risk tier, so it can neither
+    be gated nor classified as reversible; fail closed instead of guessing.
+    """
+    for spec in REGISTRY.values():
+        declared = {
+            item.get("name") for item in spec.actions if isinstance(item, dict)
+        }
+        for action in spec.action_handlers:
+            if action not in declared:
+                raise ValueError(
+                    "connector {}.{} has a handler but no actions metadata; "
+                    "refusing to start with an undefined risk tier".format(
+                        spec.id, action
+                    )
+                )
+
+
+_check_action_metadata()
+
+
+def _validate_undo_declaration(
+    spec: ConnectorSpec,
+    connector_id: str,
+    action: str,
+    declaration: Dict[str, Any],
+) -> None:
+    """Validate an undo declaration before the external write is attempted."""
+    undo_action_name = str(declaration.get("action", "")).strip()
+    argument = str(declaration.get("argument", "")).strip()
+    if not undo_action_name or not argument:
+        raise ValidationError(
+            "connector {}.{} declares an undo recipe without action/argument".format(
+                connector_id, action
+            )
+        )
+    meta = _action_metadata(spec, undo_action_name)
+    if not meta:
+        raise ValidationError(
+            "connector {}.{} declares undo action {} but it has no actions "
+            "metadata".format(connector_id, action, undo_action_name)
+        )
+    if meta.get("risk") == "read":
+        raise ValidationError(
+            "connector {}.{} declares read action {} as its undo".format(
+                connector_id, action, undo_action_name
+            )
+        )
+    if undo_action_name not in spec.action_handlers:
+        raise ValidationError(
+            "connector {}.{} declares undo action {} but it has no handler".format(
+                connector_id, action, undo_action_name
+            )
+        )
+
+
 def get_connector(connector_id: str) -> ConnectorSpec:
     try:
         return REGISTRY[connector_id]
@@ -1181,8 +1241,7 @@ def undo_action(
             conn, home, connector_id, action, dict(target), opener=opener
         )
     except ProviderError as exc:
-        message = str(exc)
-        if message.endswith("HTTP 404") or message.endswith("HTTP 410"):
+        if getattr(exc, "provider_status", None) in (404, 410):
             return {
                 "connector": connector_id,
                 "action": action,
@@ -1211,15 +1270,22 @@ def call_action(
                 action, connector_id, ", ".join(sorted(spec.action_handlers)) or "none"
             )
         )
+    meta = _action_metadata(spec, action)
+    if not meta:
+        raise ValidationError(
+            "connector {}.{} has a handler but no actions metadata; refusing to "
+            "execute an action with no risk tier".format(connector_id, action)
+        )
+    declaration = meta.get("undo") if isinstance(meta.get("undo"), dict) else None
+    if declaration:
+        _validate_undo_declaration(spec, connector_id, action, declaration)
     if not isinstance(arguments, dict):
         raise ValidationError("arguments must be an object")
     token = _get_token(conn, spec, home, opener, connector_id)
     result = handler(conn, home, token, arguments, opener)
-    meta = _action_metadata(spec, action)
     undo = None
     irreversible = False
     irreversible_reason = ""
-    declaration = meta.get("undo") if isinstance(meta.get("undo"), dict) else None
     if declaration:
         undo = _build_undo_recipe(connector_id, action, declaration, result)
     elif meta.get("risk") in ("external", "destructive"):

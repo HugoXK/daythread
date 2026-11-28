@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from . import obs, planner, policy, sandbox
 from .db import canonical, get_setting, json_load, row_to_dict, utc_now
-from .ledger import append_step, get_steps
+from .ledger import append_step, get_steps, verify_run
 from .tools import ToolContext, ToolResult, apply_undo, get_tool
 
 RISK_ORDER = planner.RISK_ORDER
@@ -719,6 +719,12 @@ def undo_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, Any
     run = get_run(conn, run_id)
     if run["state"] != "completed":
         raise ValueError("run {} is {}, only completed runs can be undone".format(run_id, run["state"]))
+    verified, errors = verify_run(conn, run_id)
+    if not verified:
+        raise ValueError(
+            "run {} ledger failed verification; refusing to undo before any "
+            "external call: {}".format(run_id, "; ".join(errors[:3]) or "unknown error")
+        )
 
     candidates = []
     no_ops = []
