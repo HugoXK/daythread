@@ -165,6 +165,28 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("Traceback", err)
 
     def test_ledger_verify_rejects_unknown_run(self):
+        """An unknown run id must fail closed on text and --json paths.
+
+        Red at the parent of dd142c83 (the commit that added the existence
+        check to ``_ledger``), green from dd142c83 on. Reviewers without a
+        clone can reproduce the red half from a tarball snapshot:
+
+            curl -sSL \
+                "https://api.github.com/repos/HugoXK/daythread/tarball/3d7ec699af1f8166a205823b54f2ae6dfd560adc" \
+                -o /tmp/dt-parent.tgz
+            mkdir -p /tmp/dt-parent && tar -xzf /tmp/dt-parent.tgz -C /tmp/dt-parent
+            SRC=$(ls -d /tmp/dt-parent/HugoXK-daythread-*)
+            cp tests/test_cli.py "$SRC/tests/test_cli.py"
+            (cd "$SRC" && python3 -m unittest \
+                tests.test_cli.CliTest.test_ledger_verify_rejects_unknown_run)
+            # expected: Ran 1 test ... FAILED (failures=1), AssertionError: 0 != 1
+
+        Same command on this branch / current main: Ran 1 test ... OK.
+
+        The --json half also asserts empty stdout: failing closed means no
+        document at all, so a regression that still prints {"ok": true, ...}
+        while returning rc=1 is caught here instead of passing.
+        """
         code, out, err = run_cli(
             ["--home", self.home, "ledger", "deadbeef", "--verify"]
         )
@@ -178,8 +200,10 @@ class CliTest(unittest.TestCase):
             ["--home", self.home, "--json", "ledger", "deadbeef", "--verify"]
         )
         self.assertEqual(code, 1)
-        self.assertIn("run not found", err)
+        self.assertEqual(out, "")
+        self.assertIn("run not found: deadbeef", err)
         self.assertNotIn("ledger OK", out)
+        self.assertNotIn("Traceback", err)
 
     def test_ledger_verify_rejects_short_run_id_prefix(self):
         code, _, _ = run_cli(
