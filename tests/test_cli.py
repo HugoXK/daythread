@@ -204,6 +204,33 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("ledger OK", out)
         self.assertIn("run not found", err)
 
+    def test_ledger_verify_empty_run_reports_no_steps(self):
+        code, _, _ = run_cli(["--home", self.home, "init"])
+        self.assertEqual(code, 0)
+        conn = sqlite3.connect(str(Path(self.home) / "daythread.db"))
+        conn.execute(
+            "INSERT INTO runs(id, intent, tool, args, state, risk, decision, created_at, updated_at)"
+            " VALUES('empty-run', 'x', 'note.write', '{}', 'completed', 'write', 'allow', ?, ?)",
+            ("2026-11-28T00:00:00+00:00", "2026-11-28T00:00:00+00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        code, out, err = run_cli(
+            ["--home", self.home, "ledger", "empty-run", "--verify"]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("no steps", out)
+        self.assertNotIn("ledger OK", out)
+
+        code, out, err = run_cli(
+            ["--home", self.home, "--json", "ledger", "empty-run", "--verify"]
+        )
+        self.assertEqual(code, 0, err)
+        data = json.loads(out)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["steps"], [])
+
     def test_serve_and_ui_reject_symlinked_home_before_side_effects(self):
         real = Path(self.home) / "real-home"
         real.mkdir()
