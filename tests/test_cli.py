@@ -149,6 +149,8 @@ class CliTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("TAMPERED", out)
         self.assertIn("hash mismatch", out)
+        self.assertIn("error: ledger verification failed:", err)
+        self.assertNotIn("Traceback", err)
 
         code, out, err = run_cli(
             ["--home", self.home, "--json", "ledger", run_id, "--verify"]
@@ -157,6 +159,8 @@ class CliTest(unittest.TestCase):
         data = json.loads(out)
         self.assertFalse(data["ok"])
         self.assertTrue(data["errors"])
+        self.assertIn("error:", err)
+        self.assertNotIn("Traceback", err)
 
     def test_policy_deny_blocks_external(self):
         code, out, _ = run_cli(
