@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from . import obs, planner, policy, sandbox
 from .db import canonical, get_setting, json_load, row_to_dict, utc_now
-from .ledger import append_step, get_steps
+from .ledger import append_step, get_steps, verify_run
 from .tools import ToolContext, ToolResult, apply_undo, get_tool
 
 RISK_ORDER = planner.RISK_ORDER
@@ -169,6 +169,7 @@ def _run_isolated(
         summary=str(result.get("summary", "")),
         undo=result.get("undo"),
         irreversible=bool(result.get("irreversible", False)),
+        no_op=bool(result.get("no_op", False)),
         data=result.get("data") or {},
     )
 
@@ -613,6 +614,7 @@ def _execute_step(
             "summary": result.summary,
             "undo": result.undo,
             "irreversible": result.irreversible,
+            "no_op": bool(result.no_op),
             "data": result.data,
         }
         if spec.idempotent:
@@ -686,16 +688,53 @@ def cancel_run(conn: sqlite3.Connection, run_id: str, actor: str = "user") -> Di
     return get_run(conn, run_id)
 
 
+def _mark_undone_noop(
+    conn: sqlite3.Connection, run_id: str, no_ops: List[Dict[str, Any]]
+) -> None:
+    """A run whose only writes were no-ops is already at its baseline."""
+    conn.execute(
+        "UPDATE idempotency SET status = 'undone' WHERE run_id = ?", (run_id,)
+    )
+    conn.commit()
+    _update_state(conn, run_id, "undone")
+    append_step(
+        conn,
+        run_id,
+        "undone",
+        {"steps": 0, "no_op_steps": [step["id"] for step in no_ops]},
+    )
+    obs.incr(conn, "runs.undone")
+    run = get_run(conn, run_id)
+    obs.audit(
+        conn,
+        "run.undone",
+        actor="user",
+        target=run_id,
+        detail={"steps": 0, "no_op_steps": len(no_ops)},
+        trace_id=run.get("trace_id"),
+    )
+
+
 def undo_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, Any]:
     run = get_run(conn, run_id)
     if run["state"] != "completed":
         raise ValueError("run {} is {}, only completed runs can be undone".format(run_id, run["state"]))
+    verified, errors = verify_run(conn, run_id)
+    if not verified:
+        raise ValueError(
+            "run {} ledger failed verification; refusing to undo before any "
+            "external call: {}".format(run_id, "; ".join(errors[:3]) or "unknown error")
+        )
 
     candidates = []
+    no_ops = []
     for step in get_steps(conn, run_id):
         if step["kind"] in ("executed", "step.succeeded"):
             payload = step["payload"]
             if payload.get("idempotent_hit"):
+                continue
+            if payload.get("no_op"):
+                no_ops.append(step)
                 continue
             if payload.get("irreversible"):
                 raise ValueError("run {} contains an irreversible step".format(run_id))
@@ -704,6 +743,9 @@ def undo_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, Any
             candidates.append((step, payload["undo"]))
 
     if not candidates:
+        if no_ops:
+            _mark_undone_noop(conn, run_id, no_ops)
+            return get_run(conn, run_id)
         raise ValueError("run {} has no reversible steps".format(run_id))
 
     ctx = ToolContext(conn=conn, home=Path(home), run_id=run_id)
@@ -718,10 +760,17 @@ def undo_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, Any
                 {
                     "undone_step": step["id"] if "step_id" not in step["payload"] else step["payload"]["step_id"],
                     "summary": summary,
+                    "idempotency_key": recipe.get("idempotency_key"),
                 },
             )
             undone += 1
     except Exception as exc:  # noqa: BLE001 - record partial undo
+        append_step(
+            conn,
+            run_id,
+            "undo.failed",
+            {"error": str(exc), "error_type": type(exc).__name__},
+        )
         _update_state(conn, run_id, "undo_failed", error=str(exc))
         obs.incr(conn, "runs.undo_failed")
         raise

@@ -48,6 +48,7 @@ def main(argv=None) -> int:
                 "summary": result.summary,
                 "undo": result.undo,
                 "irreversible": result.irreversible,
+                "no_op": result.no_op,
                 "data": result.data,
             },
         }

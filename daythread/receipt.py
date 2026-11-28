@@ -13,8 +13,9 @@ Privacy rules:
 
 * step payloads are committed to as ``payload_digest`` only, never inlined;
 * undo recipes keep only non-content fields (``kind``, ``path``, ``table``,
-  ``id``, ``ids``, ``target``); ``previous`` and ``fields`` never leave the
-  ledger, because they carry file or row content;
+  ``id``, ``ids``, ``target``, and the ``connector``/``action`` identifiers
+  needed to execute a connector recipe); ``previous`` and ``fields`` never
+  leave the ledger, because they carry file or row content;
 * what remains passes :func:`daythread.obs.redact`, so values under sensitive
   keys (token, secret, password, ...) become ``[REDACTED]``;
 * ``facts.delete`` recipes drop ids of facts with ``sensitivity`` ``secret`` or
@@ -33,6 +34,7 @@ any receipt left the repository, so no released consumer sees a change.
 from __future__ import annotations
 
 import hashlib
+import shlex
 import sqlite3
 from typing import Any, Dict, List, Optional
 
@@ -45,7 +47,16 @@ VERSION = 1
 
 _EXECUTED_KINDS = ("executed", "step.succeeded")
 _SENSITIVE_FACT_LEVELS = ("secret", "health")
-_ALLOWED_RECIPE_FIELDS = ("kind", "path", "table", "id", "ids", "target")
+_ALLOWED_RECIPE_FIELDS = (
+    "kind",
+    "path",
+    "table",
+    "id",
+    "ids",
+    "target",
+    "connector",
+    "action",
+)
 _APPROVAL_KINDS = {"approval": "approved", "rejection": "rejected"}
 
 
@@ -260,10 +271,15 @@ def to_markdown(data: Dict[str, Any]) -> str:
         "- recipes: {}".format(len(undo["recipes"])),
     ]
     for recipe in undo["recipes"]:
+        name = recipe.get("kind", "?")
+        if recipe.get("connector") and recipe.get("action"):
+            name = "{}.{}".format(recipe["connector"], recipe["action"])
         lines.append(
-            "- `{}` {}".format(
-                recipe.get("kind", "?"), canonical(recipe.get("target", {}))
-            )
+            "- `{}` {}".format(name, canonical(recipe.get("target", {})))
         )
+    if undo["available"]:
+        lines.append("- command: `dt undo {}`".format(shlex.quote(run["id"])))
+    elif undo["irreversible"]:
+        lines.append("- command: none (irreversible)")
     lines.append("")
     return "\n".join(lines)
