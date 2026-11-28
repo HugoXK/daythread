@@ -34,6 +34,7 @@ from . import (
     policy,
     privacy,
     proactivity,
+    receipt,
     relay,
     runtime,
     scheduler,
@@ -179,6 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
     ledger = sub.add_parser("ledger", help="show or verify a run ledger")
     ledger.add_argument("run_id")
     ledger.add_argument("--verify", action="store_true")
+
+    receipt_p = sub.add_parser("receipt", help="export a verifiable receipt for a finished run")
+    receipt_p.add_argument("run_id")
+    receipt_p.add_argument("--json", action="store_true", dest="as_json", default=argparse.SUPPRESS,
+                           help="machine-readable JSON instead of Markdown")
+    receipt_p.add_argument("--out", default=None, metavar="PATH", help="write the receipt to PATH")
 
     pol = sub.add_parser("policy", help="show or change risk policy")
     pol_sub = pol.add_subparsers(dest="policy_cmd", required=True)
@@ -456,7 +463,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         init_db(conn)
         _dispatch(args, conn, home, db_path)
     except (DaythreadError, KeyError, ValueError) as exc:
-        print("error: {}".format(exc), file=sys.stderr)
+        message = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
+        print("error: {}".format(message), file=sys.stderr)
         return 1
     finally:
         conn.close()
@@ -527,6 +535,8 @@ def _dispatch(args: argparse.Namespace, conn, home: Path, db_path: Path) -> None
         _print_run(runtime.cancel_run(conn, args.run_id), args.as_json, steps=True)
     elif cmd == "ledger":
         _ledger(args, conn)
+    elif cmd == "receipt":
+        _receipt(args, conn)
     elif cmd == "policy":
         _policy(args, conn)
     elif cmd == "signal":
@@ -919,6 +929,17 @@ def _ledger(args: argparse.Namespace, conn) -> None:
                 json.dumps(step["payload"], ensure_ascii=False, sort_keys=True),
             )
         )
+
+
+def _receipt(args: argparse.Namespace, conn) -> None:
+    data = receipt.build_receipt(conn, args.run_id)
+    text = receipt.to_json(data) if args.as_json else receipt.to_markdown(data)
+    print(text)
+    if args.out:
+        try:
+            Path(args.out).expanduser().write_text(text + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise ValueError("cannot write receipt: {}".format(exc))
 
 
 def _policy(args: argparse.Namespace, conn) -> None:
