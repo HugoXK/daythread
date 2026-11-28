@@ -499,6 +499,9 @@ Assets: `assets/icon.svg`, `assets/logo.svg`, `assets/logo-mark.svg`,
 - [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) — data inventory, DSAR, retention,
   SOC 2-style mapping, incident response
 - [`docs/RELEASE.md`](docs/RELEASE.md) — signing, attestation, sidecar, CI
+- [`docs/competitive/2026-11-27-auditable-reversible-execution.md`](docs/competitive/2026-11-27-auditable-reversible-execution.md)
+  — capability memo v1.1 (auditable reversible execution; competitor claims
+  marked unverified)
 
 ## Compliance
 
