@@ -44,7 +44,7 @@ from . import (
 )
 from .crypto import SecretVault
 from .db import connect, get_setting, init_db, set_setting
-from .errors import DaythreadError
+from .errors import BenchError, DaythreadError
 from .ledger import get_steps, verify_run
 from .server import ApiServer, ensure_token
 
@@ -466,7 +466,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         init_db(conn)
         _dispatch(args, conn, home, db_path)
-    except (DaythreadError, KeyError, ValueError, RuntimeError) as exc:
+    except (DaythreadError, KeyError, ValueError) as exc:
         message = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
         print("error: {}".format(message), file=sys.stderr)
         return 1
@@ -1368,7 +1368,7 @@ def _bench(args: argparse.Namespace) -> None:
             for case in results.get("safety_cases", [])
             if not case.get("pass")
         ]
-        raise RuntimeError(
+        raise BenchError(
             "bench safety failed: {}".format(
                 ", ".join(failed) or "one or more safety checks"
             )

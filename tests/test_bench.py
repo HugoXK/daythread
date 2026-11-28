@@ -106,6 +106,9 @@ class BenchTest(unittest.TestCase):
             code, out, err = run_cli(["--home", str(self.home), "--json", "bench"])
         self.assertNotEqual(code, 0)
         self.assertIn("error:", err)
+        self.assertIn("bench safety failed", err)
+        self.assertIn("receipt_tamper_rejected", err)
+        self.assertNotIn("Traceback", err)
 
 
 if __name__ == "__main__":

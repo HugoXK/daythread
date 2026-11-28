@@ -30,6 +30,25 @@ class CliV3Test(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_cli_does_not_swallow_unrelated_runtime_errors(self):
+        with mock.patch(
+            "daythread.cli.brief.morning_brief", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                run_cli(["--home", self.home, "brief"])
+
+    def test_cli_reports_token_permission_error_cleanly(self):
+        from daythread.server import TokenPermissionError
+
+        with mock.patch(
+            "daythread.cli.ApiServer",
+            side_effect=TokenPermissionError("refusing to start: token is unsafe"),
+        ):
+            code, out, err = run_cli(["--home", self.home, "serve", "--port", "0"])
+        self.assertEqual(code, 1)
+        self.assertIn("error: refusing to start", err)
+        self.assertNotIn("Traceback", err)
+
     def test_ask_and_model(self):
         code, out, _ = run_cli(["--home", self.home, "ask", "hello"])
         self.assertEqual(code, 0)

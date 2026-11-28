@@ -51,23 +51,81 @@ SECURITY_HEADERS = {
 }
 
 
+class TokenPermissionError(DaythreadError):
+    """Fail-closed token lifecycle error: unsafe path, mode, or write."""
+
+    code = "token_permission"
+    status = 500
+
+
 def _chmod_or_fail(path: Path, mode: int) -> None:
     try:
         os.chmod(str(path), mode)
     except OSError as exc:
         command = "chmod {:o} {}".format(mode, shlex.quote(str(path)))
-        raise RuntimeError(
+        raise TokenPermissionError(
             "refusing to start: cannot set permissions {:04o} on {}: {}. "
             "Fix: {}".format(mode, path, exc, command)
         ) from exc
 
 
+def _write_token_atomically(home: Path, path: Path, token: str) -> None:
+    """Write via a private temp file + ``rename``; never truncate the old token.
+
+    A failure anywhere before ``os.replace`` leaves the previous ``api_token``
+    intact, so a failed rotation does not destroy the working token.
+    """
+    tmp = home / ".api_token.{}.tmp".format(secrets.token_hex(8))
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd: Optional[int] = None
+    try:
+        fd = os.open(str(tmp), flags, 0o600)
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is not None:
+            fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(token)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(tmp), str(path))
+    except OSError as exc:
+        if fd is not None:
+            os.close(fd)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise TokenPermissionError(
+            "refusing to start: cannot write {} safely: {}. "
+            "Fix: check permissions on {}; the previous token was kept".format(
+                path, exc, shlex.quote(str(home))
+            )
+        ) from exc
+    # The temp file was already opened 0600; os.replace keeps that mode.
+
+
 def ensure_token(home: Path, rotate: bool = False) -> str:
+    """Create/rotate the 0600 ``api_token`` in ``home``, failing closed.
+
+    A symlinked ``home`` itself is refused; symlinks in *ancestor* directories
+    are out of scope (they need write access to the parent, a local threat
+    outside this function). Rotation writes a private temp file and renames it
+    over the token, so a failed rotation keeps the previous token usable.
+    """
+    home = Path(home)
+    if home.is_symlink():
+        raise TokenPermissionError(
+            "refusing to start: {} is a symlink; pass a real directory so the token "
+            "cannot be redirected. Fix: rm {}".format(
+                home, shlex.quote(str(home))
+            )
+        )
     home.mkdir(parents=True, exist_ok=True)
     _chmod_or_fail(home, 0o700)
     path = home / "api_token"
     if path.is_symlink():
-        raise RuntimeError(
+        raise TokenPermissionError(
             "refusing to start: {} is a symlink; remove it and let dt serve create a real "
             "0600 token file. Fix: rm {}".format(path, shlex.quote(str(path)))
         )
@@ -76,28 +134,10 @@ def ensure_token(home: Path, rotate: bool = False) -> str:
         token = path.read_text(encoding="utf-8").strip()
         if token:
             return token
+    if path.exists():
+        _chmod_or_fail(path, 0o600)
     token = secrets.token_urlsafe(32)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(str(path), flags, 0o600)
-    except OSError as exc:
-        raise RuntimeError(
-            "refusing to start: cannot open {} safely (symlink or permissions): {}. "
-            "Fix: rm {}".format(path, exc, shlex.quote(str(path)))
-        ) from exc
-    fchmod = getattr(os, "fchmod", None)
-    if fchmod is not None:
-        try:
-            fchmod(fd, 0o600)
-        except OSError as exc:
-            os.close(fd)
-            raise RuntimeError(
-                "refusing to start: cannot secure {} before writing the token: {}. "
-                "Fix: rm {}".format(path, exc, shlex.quote(str(path)))
-            ) from exc
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(token)
-    _chmod_or_fail(path, 0o600)
+    _write_token_atomically(home, path, token)
     return token
 
 
