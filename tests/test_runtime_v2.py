@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from daythread import runtime
 from daythread.db import connect, init_db, set_setting
@@ -233,6 +234,113 @@ class RuntimeV2Test(unittest.TestCase):
         self.assertEqual(run["state"], "pending_approval")
         cancelled = runtime.cancel_run(self.conn, run["id"])
         self.assertEqual(cancelled["state"], "cancelled")
+
+    def test_lease_lost_raises_specific_conflict(self):
+        from daythread.errors import LeaseLostError
+
+        run = runtime.propose(
+            self.conn,
+            self.home,
+            "note.write",
+            {"path": "a.md", "content": "A"},
+        )
+        self.conn.execute(
+            "UPDATE runs SET lease_owner = ? WHERE id = ?",
+            ("owner-a", run["id"]),
+        )
+        self.conn.commit()
+        with self.assertRaises(LeaseLostError) as caught:
+            runtime._heartbeat(self.conn, run["id"], "owner-b")
+        self.assertEqual(caught.exception.code, "lease_lost")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(
+            str(caught.exception), "run lease lost for {}".format(run["id"])
+        )
+
+    def test_uncertain_external_outcome_raises_specific_conflict(self):
+        from daythread.errors import UncertainOutcomeError
+
+        calls = {"n": 0}
+
+        def failing(ctx, args):
+            calls["n"] += 1
+            raise TimeoutError("simulated external timeout")
+
+        TOOLS["test.uncertain"] = ToolSpec(
+            "test.uncertain", "external", "fails", failing, "test", idempotent=False
+        )
+        try:
+            run = runtime.propose_plan(
+                self.conn,
+                self.home,
+                [{"id": "s1", "tool": "test.uncertain", "args": {}}],
+                force_approval=True,
+            )
+            self.assertEqual(run["state"], "pending_approval")
+            run = runtime.approve(self.conn, self.home, run["id"])
+            self.assertEqual(run["state"], "failed")
+            self.conn.execute(
+                "UPDATE runs SET state = 'approved' WHERE id = ?", (run["id"],)
+            )
+            self.conn.commit()
+            with self.assertRaises(UncertainOutcomeError) as caught:
+                runtime.execute_run(self.conn, self.home, run["id"])
+        finally:
+            TOOLS.pop("test.uncertain", None)
+        self.assertEqual(caught.exception.code, "uncertain_outcome")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("uncertain external outcome", str(caught.exception))
+        self.assertEqual(calls["n"], 1)
+
+    def test_execute_run_lease_loser_leaves_run_for_winner(self):
+        from daythread.errors import LeaseLostError
+
+        run = runtime.propose_plan(
+            self.conn,
+            self.home,
+            [
+                {
+                    "id": "s1",
+                    "tool": "note.write",
+                    "args": {"path": "a.md", "content": "A"},
+                }
+            ],
+            force_approval=True,
+        )
+        self.assertEqual(run["state"], "pending_approval")
+        self.conn.execute(
+            "UPDATE runs SET state = 'approved', lease_owner = NULL, "
+            "lease_until = NULL WHERE id = ?",
+            (run["id"],),
+        )
+        self.conn.commit()
+
+        def lose_lease(conn, run_id, owner):
+            conn.execute(
+                "UPDATE runs SET lease_owner = ?, lease_until = ? WHERE id = ?",
+                ("winner", "2999-01-01T00:00:00+00:00", run_id),
+            )
+            conn.commit()
+            raise LeaseLostError("run lease lost for {}".format(run_id))
+
+        with mock.patch("daythread.runtime._heartbeat", side_effect=lose_lease):
+            with self.assertRaises(LeaseLostError):
+                runtime.execute_run(self.conn, self.home, run["id"])
+
+        row = self.conn.execute(
+            "SELECT state, lease_owner FROM runs WHERE id = ?", (run["id"],)
+        ).fetchone()
+        self.assertEqual(row["state"], "running")
+        self.assertEqual(row["lease_owner"], "winner")
+        kinds = [step["kind"] for step in runtime.get_steps(self.conn, run["id"])]
+        self.assertNotIn("run.failed", kinds)
+
+        self.conn.execute(
+            "UPDATE runs SET lease_until = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", run["id"]),
+        )
+        self.conn.commit()
+        self.assertTrue(runtime._claim_run(self.conn, run["id"], "owner-b"))
 
 
 if __name__ == "__main__":

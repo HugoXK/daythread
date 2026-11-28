@@ -31,6 +31,20 @@ class BudgetExceededError(DaythreadError):
     status = 429
 
 
+class LeaseLostError(DaythreadError):
+    """The run lease was taken over; this executor must stop."""
+
+    code = "lease_lost"
+    status = 409
+
+
+class UncertainOutcomeError(DaythreadError):
+    """A non-idempotent external step may have run; review before resuming."""
+
+    code = "uncertain_outcome"
+    status = 409
+
+
 class ProviderError(DaythreadError):
     code = "provider_error"
     status = 502

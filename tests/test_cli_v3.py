@@ -49,6 +49,66 @@ class CliV3Test(unittest.TestCase):
         self.assertIn("error: refusing to start", err)
         self.assertNotIn("Traceback", err)
 
+    def test_cli_reports_lease_lost_cleanly(self):
+        from daythread.errors import LeaseLostError
+
+        with mock.patch(
+            "daythread.runtime._heartbeat",
+            side_effect=LeaseLostError("run lease lost for demo"),
+        ):
+            code, out, err = run_cli(
+                [
+                    "--home",
+                    self.home,
+                    "act",
+                    "note.write",
+                    "--arg",
+                    "path=a.md",
+                    "--arg",
+                    "content=A",
+                ]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("error: run lease lost for demo", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_cli_reports_uncertain_external_outcome_cleanly(self):
+        from daythread import runtime
+        from daythread.db import connect, init_db
+        from daythread.tools import TOOLS, ToolSpec
+
+        def failing(ctx, args):
+            raise TimeoutError("simulated external timeout")
+
+        TOOLS["test.cli_uncertain"] = ToolSpec(
+            "test.cli_uncertain", "external", "fails", failing, "test", idempotent=False
+        )
+        try:
+            conn = connect(Path(self.home) / "daythread.db")
+            try:
+                init_db(conn)
+                run = runtime.propose_plan(
+                    conn,
+                    Path(self.home),
+                    [{"id": "s1", "tool": "test.cli_uncertain", "args": {}}],
+                    force_approval=True,
+                )
+                self.assertEqual(run["state"], "pending_approval")
+                run = runtime.approve(conn, Path(self.home), run["id"])
+                self.assertEqual(run["state"], "failed")
+                conn.execute(
+                    "UPDATE runs SET state = 'approved' WHERE id = ?", (run["id"],)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            code, out, err = run_cli(["--home", self.home, "resume", run["id"]])
+        finally:
+            TOOLS.pop("test.cli_uncertain", None)
+        self.assertEqual(code, 1)
+        self.assertIn("uncertain external outcome", err)
+        self.assertNotIn("Traceback", err)
+
     def test_ask_and_model(self):
         code, out, _ = run_cli(["--home", self.home, "ask", "hello"])
         self.assertEqual(code, 0)
