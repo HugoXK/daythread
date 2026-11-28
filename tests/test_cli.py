@@ -220,8 +220,13 @@ class CliTest(unittest.TestCase):
             ["--home", self.home, "ledger", "empty-run", "--verify"]
         )
         self.assertEqual(code, 0, err)
-        self.assertIn("no steps", out)
+        self.assertIn("no steps for run empty-run", out)
         self.assertNotIn("ledger OK", out)
+        self.assertNotIn("ledger empty-run:", out)
+
+        code, out, err = run_cli(["--home", self.home, "ledger", "empty-run"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("no steps for run empty-run", out)
 
         code, out, err = run_cli(
             ["--home", self.home, "--json", "ledger", "empty-run", "--verify"]

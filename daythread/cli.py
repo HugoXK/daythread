@@ -942,7 +942,7 @@ def _ledger(args: argparse.Namespace, conn) -> None:
                 {"run_id": args.run_id, "ok": True, "errors": [], "steps": steps}
             )
             return
-        print("ledger {}: no steps".format(args.run_id))
+        print("no steps for run {}".format(args.run_id))
         return
     verify_errors = []
     verify_failed = False
