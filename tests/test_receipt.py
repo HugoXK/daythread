@@ -68,7 +68,7 @@ class ReceiptTest(unittest.TestCase):
 
         self.assertEqual(
             set(data),
-            {"version", "run", "steps", "chain_head", "policy", "undo", "digest"},
+            {"version", "run", "approvals", "steps", "chain_head", "policy", "undo", "digest"},
         )
         self.assertEqual(data["version"], 1)
         self.assertEqual(
@@ -77,6 +77,7 @@ class ReceiptTest(unittest.TestCase):
         self.assertEqual(data["run"]["id"], run["id"])
         self.assertEqual(data["run"]["state"], run["state"])
         self.assertIsNone(data["run"]["plan_id"])
+        self.assertEqual(data["approvals"], [])
 
         steps = get_steps(self.conn, run["id"])
         self.assertEqual(len(data["steps"]), len(steps))
@@ -120,9 +121,8 @@ class ReceiptTest(unittest.TestCase):
                     {
                         "undo": {
                             "kind": "connector.delete",
-                            "token": token,
                             "api_key": api_key,
-                            "target": {"event_id": "evt-1"},
+                            "target": {"event_id": "evt-1", "token": token},
                         }
                     },
                 )
@@ -133,7 +133,10 @@ class ReceiptTest(unittest.TestCase):
         self.assertNotIn(token, text)
         self.assertNotIn(api_key, text)
         self.assertIn("[REDACTED]", text)
-        self.assertEqual(data["undo"]["recipes"][0]["target"], {"event_id": "evt-1"})
+        self.assertEqual(
+            data["undo"]["recipes"][0]["target"],
+            {"event_id": "evt-1", "token": "[REDACTED]"},
+        )
 
     def test_receipt_excludes_secret_and_health_facts(self):
         secret = memory.add_fact(
@@ -175,6 +178,36 @@ class ReceiptTest(unittest.TestCase):
         data = receipt.build_receipt(self.conn, "only-secret-run")
         self.assertEqual(data["undo"]["recipes"], [])
         self.assertFalse(data["undo"]["available"])
+
+    def test_undo_recipe_never_inlines_previous_content(self):
+        old_content = "CANARY-OLD-SECRET-VALUE"
+        run = self._run(args={"path": "notes/plan.md", "content": old_content})
+        self.assertEqual(run["state"], "completed")
+        second = self._run(args={"path": "notes/plan.md", "content": "new content"})
+        data = receipt.build_receipt(self.conn, second["id"])
+        text = receipt.to_json(data)
+        self.assertNotIn(old_content, text)
+        recipe = data["undo"]["recipes"][0]
+        self.assertEqual(recipe["kind"], "file.write")
+        self.assertEqual(recipe["path"], "notes/plan.md")
+        self.assertNotIn("previous", recipe)
+        self.assertNotIn("fields", recipe)
+
+    def test_approval_record_is_projected(self):
+        run = self._run("message.send", {"to": "maya@example.com", "body": "hi"})
+        run = runtime.approve(self.conn, self.home, run["id"], approver="alice-reviewer")
+        data = receipt.build_receipt(self.conn, run["id"])
+        self.assertEqual(len(data["approvals"]), 1)
+        approval = data["approvals"][0]
+        self.assertEqual(approval["decision"], "approved")
+        self.assertEqual(approval["approver"], "alice-reviewer")
+        self.assertTrue(approval["ts"])
+        self.assertIn("alice-reviewer", receipt.to_json(data))
+        self.assertIn("alice-reviewer", receipt.to_markdown(data))
+
+    def test_sensitive_fact_ids_survive_many_ids(self):
+        many = ["fact-{}".format(index) for index in range(1500)]
+        self.assertEqual(receipt._sensitive_fact_ids(self.conn, many), set())
 
     def test_tampered_ledger_changes_receipt_digest(self):
         run = self._run()
@@ -264,6 +297,13 @@ class ReceiptTest(unittest.TestCase):
         self.assertIn(run["id"], text)
         self.assertIn(data["digest"], text)
         self.assertIn("chain_head", text)
+        self.assertIn("prev_hash", text)
+        self.assertIn("## Approvals", text)
+        for step in data["steps"]:
+            self.assertIn(step["hash"], text)
+            self.assertIn(step["prev_hash"] or "-", text)
+        self.assertEqual(len(data["steps"][0]["hash"]), 64)
+        self.assertEqual(len(data["steps"][-1]["hash"]), 64)
 
 
 class ReceiptCliTest(unittest.TestCase):
@@ -347,7 +387,8 @@ class ReceiptCliTest(unittest.TestCase):
     def test_cli_unknown_run_exits_nonzero_without_traceback(self):
         code, out, err = run_cli(["--home", str(self.home), "receipt", "missing"])
         self.assertEqual(code, 1)
-        self.assertIn("run not found", err)
+        self.assertIn("error: run not found: missing", err)
+        self.assertNotIn("'run not found", err)
         self.assertNotIn("Traceback", err)
         self.assertEqual(out, "")
 

@@ -12,15 +12,22 @@ refuses it instead of emitting a partial document.
 Privacy rules:
 
 * step payloads are committed to as ``payload_digest`` only, never inlined;
-* undo recipes pass through :func:`daythread.obs.redact`, so values under
-  sensitive keys (token, secret, password, ...) become ``[REDACTED]``;
+* undo recipes keep only non-content fields (``kind``, ``path``, ``table``,
+  ``id``, ``ids``, ``target``); ``previous`` and ``fields`` never leave the
+  ledger, because they carry file or row content;
+* what remains passes :func:`daythread.obs.redact`, so values under sensitive
+  keys (token, secret, password, ...) become ``[REDACTED]``;
 * ``facts.delete`` recipes drop ids of facts with ``sensitivity`` ``secret`` or
   ``health``; a recipe left with no ids is dropped entirely;
+* ``approvals`` carries the real approver, decision and step time, so the
+  receipt can prove who let an external step run;
 * everything that remains is still derived from the run, so treat a receipt as
   sensitive as the run it describes.
 
 ``version`` is part of the external contract: bump it whenever the meaning of
-an existing field changes, and document the old/new semantics in the PR.
+an existing field changes, and document the old/new semantics in the PR. The
+field set is frozen at 1 for this first release; ``approvals`` was added before
+any receipt left the repository, so no released consumer sees a change.
 """
 
 from __future__ import annotations
@@ -38,6 +45,8 @@ VERSION = 1
 
 _EXECUTED_KINDS = ("executed", "step.succeeded")
 _SENSITIVE_FACT_LEVELS = ("secret", "health")
+_ALLOWED_RECIPE_FIELDS = ("kind", "path", "table", "id", "ids", "target")
+_APPROVAL_KINDS = {"approval": "approved", "rejection": "rejected"}
 
 
 def _sha256(text: str) -> str:
@@ -70,27 +79,59 @@ def _sensitive_fact_ids(conn: sqlite3.Connection, ids: List[Any]) -> set:
     wanted = [str(item) for item in ids]
     if not wanted:
         return set()
-    placeholders = ",".join("?" for _ in wanted)
-    rows = conn.execute(
-        "SELECT id FROM facts WHERE id IN ({}) AND sensitivity IN ({})".format(
-            placeholders, ",".join("?" for _ in _SENSITIVE_FACT_LEVELS)
-        ),
-        wanted + list(_SENSITIVE_FACT_LEVELS),
-    ).fetchall()
-    return {row["id"] for row in rows}
+    sensitive = set()
+    chunk = 500  # keep below SQLite's bound-variable limit
+    for start in range(0, len(wanted), chunk):
+        part = wanted[start : start + chunk]
+        rows = conn.execute(
+            "SELECT id FROM facts WHERE id IN ({}) AND sensitivity IN ({})".format(
+                ",".join("?" for _ in part),
+                ",".join("?" for _ in _SENSITIVE_FACT_LEVELS),
+            ),
+            part + list(_SENSITIVE_FACT_LEVELS),
+        ).fetchall()
+        sensitive.update(row["id"] for row in rows)
+    return sensitive
 
 
 def _filter_recipe(conn: sqlite3.Connection, recipe: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Redact sensitive keys, then drop sensitive fact ids from ``ids`` lists."""
+    """Keep only non-content recipe fields, redacted; drop sensitive fact ids.
+
+    ``previous`` / ``fields`` carry file or row content, so they never leave the
+    ledger: a receipt is meant to be handed to someone else.
+    """
+    if not isinstance(recipe, dict):
+        return None
     cleaned = redact(recipe)
-    ids = cleaned.get("ids") if isinstance(cleaned, dict) else None
+    cleaned = {
+        key: value for key, value in cleaned.items() if key in _ALLOWED_RECIPE_FIELDS
+    }
+    ids = cleaned.get("ids")
     if isinstance(ids, list):
         sensitive = _sensitive_fact_ids(conn, ids)
         remaining = [item for item in ids if str(item) not in sensitive]
         if not remaining:
             return None
         cleaned["ids"] = remaining
-    return cleaned
+    return cleaned or None
+
+
+def _approval_projection(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Real approver / decision / time from approval and rejection steps."""
+    approvals = []
+    for step in steps:
+        decision = _APPROVAL_KINDS.get(step.get("kind"))
+        if decision is None:
+            continue
+        payload = step.get("payload") or {}
+        approvals.append(
+            {
+                "decision": decision,
+                "approver": payload.get("approver", ""),
+                "ts": step["created_at"],
+            }
+        )
+    return approvals
 
 
 def _undo_projection(
@@ -145,6 +186,7 @@ def build_receipt(conn: sqlite3.Connection, run_id: str) -> Dict[str, Any]:
             "created_at": run["created_at"],
             "finished_at": _finished_at(run),
         },
+        "approvals": _approval_projection(steps),
         "steps": projected,
         "chain_head": projected[-1]["hash"] if projected else "",
         "policy": {"risk": run["risk"], "decision": run["decision"]},
@@ -157,11 +199,6 @@ def build_receipt(conn: sqlite3.Connection, run_id: str) -> Dict[str, Any]:
 def to_json(data: Dict[str, Any]) -> str:
     """Canonical, byte-stable JSON encoding of a receipt (no trailing newline)."""
     return canonical(data)
-
-
-def _short(value: Any, length: int = 16) -> str:
-    text = "" if value is None else str(value)
-    return text[:length] if len(text) > length else text
 
 
 def to_markdown(data: Dict[str, Any]) -> str:
@@ -182,19 +219,37 @@ def to_markdown(data: Dict[str, Any]) -> str:
         "- chain_head: `{}`".format(data["chain_head"] or "-"),
         "- digest: `{}`".format(data["digest"]),
         "",
+        "## Approvals",
+        "",
+    ]
+    if data["approvals"]:
+        for item in data["approvals"]:
+            lines.append(
+                "- `{}` by `{}` at `{}`".format(
+                    item["decision"], item["approver"], item["ts"]
+                )
+            )
+    else:
+        lines.append("- none")
+    lines += [
+        "",
         "## Steps",
         "",
-        "| seq | kind | hash | payload_digest |",
-        "|---|---|---|---|",
+        "| seq | kind | hash | prev_hash | payload_digest |",
+        "|---|---|---|---|---|",
     ]
     for step in data["steps"]:
         lines.append(
-            "| {} | {} | `{}` | `{}` |".format(
-                step["seq"], step["kind"], _short(step["hash"]), _short(step["payload_digest"])
+            "| {} | {} | `{}` | `{}` | `{}` |".format(
+                step["seq"],
+                step["kind"],
+                step["hash"],
+                step["prev_hash"] or "-",
+                step["payload_digest"],
             )
         )
     if not data["steps"]:
-        lines.append("| - | - | - | - |")
+        lines.append("| - | - | - | - | - |")
     undo = data["undo"]
     lines += [
         "",

@@ -49,8 +49,15 @@ and writing `--out` never changes run state. Unfinished runs (`pending_approval`
 `running`, ...) and unknown ids exit non-zero instead of producing a partial
 receipt. The ledger remains authoritative: `dt ledger <id> --verify`.
 
-Undo recipes are redacted (`obs.redact()` sensitive keys) and ids of `secret` /
-`health` facts are dropped, so a receipt does not carry those references.
+The Markdown form lists the full `hash` and `prev_hash` of every step (the JSON
+form is authoritative for tooling) and includes an `## Approvals` section with
+the real approver, decision and step time for runs that needed approval.
+
+Undo recipes keep only non-content fields (`kind`, `path`, `table`, `id`, `ids`,
+`target`): `previous`/`fields` never leave the ledger, so prior file or row
+content is not exported. Remaining values are redacted (`obs.redact()` sensitive
+keys) and ids of `secret` / `health` facts are dropped, so a receipt does not
+carry those references.
 
 `resume` refuses a failed run when a non-idempotent step may have partially
 executed (its idempotency state is `started` or `failed`). Verify the external
