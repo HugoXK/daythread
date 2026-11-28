@@ -7,9 +7,19 @@ All endpoints except `/v1/health`, `/ui`, and `/v1/webhooks/{source}` require:
 Authorization: Bearer <token>
 ```
 
-Read the token with `dt serve --print-token`. The token file is `0600`.
+Read the token with `dt serve --print-token`. The token file is `0600` and
+`$DAYTHREAD_HOME` is `0700`; `dt serve` enforces both at startup, correcting
+pre-existing modes. If a mode cannot be set, the server refuses to start and
+prints the exact remediation command (`chmod 600 <api_token>` /
+`chmod 700 <home>`).
+
 `/v1/health` is unauthenticated; `/ui` embeds the token in a loopback page;
 webhooks use per-source signatures.
+
+Every HTTP response sends `X-Frame-Options: DENY`,
+`Content-Security-Policy: frame-ancestors 'none'`,
+`X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.
+Access-log lines record those security headers but never the bearer token.
 
 ## Endpoints
 
