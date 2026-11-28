@@ -494,6 +494,9 @@ def execute_run(conn: sqlite3.Connection, home: Path, run_id: str) -> Dict[str, 
             _execute_step(conn, home, run, step, single, budget)
             _heartbeat(conn, run_id, owner)
         except LeaseLostError:
+            # Lease loser: do not write to the ledger/DB and do not clear a
+            # lease now held by the new owner. Leave the run "running" for
+            # that owner to pick up.
             raise
         except UncertainOutcomeError as exc:
             _fail_run(conn, run_id, "{}: {}".format(type(exc).__name__, exc))
