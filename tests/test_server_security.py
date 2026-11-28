@@ -10,7 +10,7 @@ from unittest import mock
 
 from daythread import obs
 from daythread.db import connect, init_db
-from daythread.server import ApiServer, ensure_token
+from daythread.server import ApiServer, TokenPermissionError, ensure_token
 
 
 class TokenPermissionTest(unittest.TestCase):
@@ -48,7 +48,7 @@ class TokenPermissionTest(unittest.TestCase):
             return real_chmod(path, mode)
 
         with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
-            with self.assertRaises(RuntimeError) as caught:
+            with self.assertRaises(TokenPermissionError) as caught:
                 ApiServer(self.home, self.db_path, port=0)
         message = str(caught.exception)
         self.assertIn(str(token_path), message)
@@ -63,7 +63,7 @@ class TokenPermissionTest(unittest.TestCase):
             return real_chmod(path, mode)
 
         with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
-            with self.assertRaises(RuntimeError) as caught:
+            with self.assertRaises(TokenPermissionError) as caught:
                 ApiServer(self.home, self.db_path, port=0)
         message = str(caught.exception)
         self.assertIn(str(self.home), message)
@@ -91,7 +91,7 @@ class TokenPermissionTest(unittest.TestCase):
         target.write_text("do-not-read", encoding="utf-8")
         token_path = self.home / "api_token"
         token_path.symlink_to(target)
-        with self.assertRaises(RuntimeError) as caught:
+        with self.assertRaises(TokenPermissionError) as caught:
             ensure_token(self.home)
         message = str(caught.exception)
         self.assertIn("symlink", message.lower())
@@ -109,7 +109,7 @@ class TokenPermissionTest(unittest.TestCase):
             return real_chmod(path, mode)
 
         with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
-            with self.assertRaises(RuntimeError) as caught:
+            with self.assertRaises(TokenPermissionError) as caught:
                 ensure_token(home)
         message = str(caught.exception)
         command = "chmod 700 {}".format(shlex.quote(str(home)))
@@ -128,12 +128,49 @@ class TokenPermissionTest(unittest.TestCase):
             return real_chmod(path, mode)
 
         with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
-            with self.assertRaises(RuntimeError) as caught:
+            with self.assertRaises(TokenPermissionError) as caught:
                 ensure_token(home)
         message = str(caught.exception)
         command = "chmod 600 {}".format(shlex.quote(str(token_path)))
         self.assertIn(command, message)
         self.assertEqual(shlex.split(command), ["chmod", "600", str(token_path)])
+
+
+    def test_rotation_failure_preserves_the_old_token(self):
+        token_path = self.home / "api_token"
+        token_path.write_text("old-token", encoding="utf-8")
+        os.chmod(token_path, 0o600)
+
+        def failing_fchmod(fd, mode):
+            raise OSError("operation not permitted")
+
+        with mock.patch("daythread.server.os.fchmod", side_effect=failing_fchmod):
+            with self.assertRaises(TokenPermissionError):
+                ensure_token(self.home, rotate=True)
+        self.assertEqual(token_path.read_text(encoding="utf-8"), "old-token")
+        self.assertTrue(token_path.exists())
+        leftovers = [
+            item.name for item in self.home.iterdir() if item.name.startswith(".api_token.")
+        ]
+        self.assertEqual(leftovers, [])
+
+    def test_symlinked_home_is_refused(self):
+        real = Path(self.tmp.name) / "real-home"
+        real.mkdir()
+        link = Path(self.tmp.name) / "linked-home"
+        link.symlink_to(real, target_is_directory=True)
+        with self.assertRaises(TokenPermissionError) as caught:
+            ensure_token(link)
+        message = str(caught.exception)
+        self.assertIn("symlink", message.lower())
+        self.assertEqual([item.name for item in real.iterdir()], [])
+
+    def test_token_failure_uses_a_specific_exception(self):
+        target = Path(self.tmp.name) / "outside-token"
+        target.write_text("do-not-read", encoding="utf-8")
+        (self.home / "api_token").symlink_to(target)
+        with self.assertRaises(TokenPermissionError):
+            ensure_token(self.home)
 
 
 class ServerHeaderTest(unittest.TestCase):
