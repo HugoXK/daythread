@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import shlex
 import sys
 import tempfile
@@ -111,6 +112,24 @@ class CliV3Test(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertNotEqual(first.strip(), second.strip())
+
+    def test_serve_fail_closed_chmod_error_has_no_traceback(self):
+        home = Path(self.home) / "home with space"
+        real_chmod = os.chmod
+
+        def fake_chmod(path, mode):
+            if Path(path) == home:
+                raise PermissionError("operation not permitted")
+            return real_chmod(path, mode)
+
+        with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
+            code, out, err = run_cli(["--home", str(home), "serve", "--print-token"])
+        self.assertEqual(code, 1)
+        self.assertIn("error:", err)
+        self.assertNotIn("Traceback", err)
+        command = "chmod 700 {}".format(shlex.quote(str(home)))
+        self.assertIn(command, err)
+        self.assertEqual(shlex.split(command), ["chmod", "700", str(home)])
 
     @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_secret_and_sync(self):

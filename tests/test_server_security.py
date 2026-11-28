@@ -69,6 +69,35 @@ class TokenPermissionTest(unittest.TestCase):
         self.assertIn(str(self.home), message)
         self.assertIn("chmod 700 {}".format(self.home), message)
 
+    def test_rotate_token_sets_private_mode_before_write(self):
+        token_path = self.home / "api_token"
+        token_path.write_text("old-token", encoding="utf-8")
+        os.chmod(token_path, 0o644)
+        observed = []
+        real_fchmod = os.fchmod
+
+        def fake_fchmod(fd, mode):
+            real_fchmod(fd, mode)
+            observed.append(stat.S_IMODE(os.fstat(fd).st_mode))
+
+        with mock.patch("daythread.server.os.fchmod", side_effect=fake_fchmod):
+            token = ensure_token(self.home, rotate=True)
+        self.assertNotEqual(token, "old-token")
+        self.assertEqual(observed, [0o600])
+        self.assertEqual(stat.S_IMODE(token_path.stat().st_mode), 0o600)
+
+    def test_token_symlink_is_refused(self):
+        target = Path(self.tmp.name) / "outside-token"
+        target.write_text("do-not-read", encoding="utf-8")
+        token_path = self.home / "api_token"
+        token_path.symlink_to(target)
+        with self.assertRaises(RuntimeError) as caught:
+            ensure_token(self.home)
+        message = str(caught.exception)
+        self.assertIn("symlink", message.lower())
+        self.assertIn(str(token_path), message)
+        self.assertEqual(target.read_text(encoding="utf-8"), "do-not-read")
+
     def test_fail_closed_quotes_home_path_with_spaces(self):
         home = Path(self.tmp.name) / "home with space"
         home.mkdir()
