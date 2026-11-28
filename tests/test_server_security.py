@@ -1,5 +1,6 @@
 import logging
 import os
+import shlex
 import stat
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from unittest import mock
 
 from daythread import obs
 from daythread.db import connect, init_db
-from daythread.server import ApiServer
+from daythread.server import ApiServer, ensure_token
 
 
 class TokenPermissionTest(unittest.TestCase):
@@ -67,6 +68,43 @@ class TokenPermissionTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn(str(self.home), message)
         self.assertIn("chmod 700 {}".format(self.home), message)
+
+    def test_fail_closed_quotes_home_path_with_spaces(self):
+        home = Path(self.tmp.name) / "home with space"
+        home.mkdir()
+        real_chmod = os.chmod
+
+        def fake_chmod(path, mode):
+            if Path(path) == home:
+                raise PermissionError("operation not permitted")
+            return real_chmod(path, mode)
+
+        with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
+            with self.assertRaises(RuntimeError) as caught:
+                ensure_token(home)
+        message = str(caught.exception)
+        command = "chmod 700 {}".format(shlex.quote(str(home)))
+        self.assertIn(command, message)
+        self.assertEqual(shlex.split(command), ["chmod", "700", str(home)])
+
+    def test_fail_closed_quotes_token_path_with_spaces(self):
+        home = Path(self.tmp.name) / "home with space"
+        home.mkdir()
+        token_path = home / "api_token"
+        real_chmod = os.chmod
+
+        def fake_chmod(path, mode):
+            if Path(path) == token_path:
+                raise PermissionError("operation not permitted")
+            return real_chmod(path, mode)
+
+        with mock.patch("daythread.server.os.chmod", side_effect=fake_chmod):
+            with self.assertRaises(RuntimeError) as caught:
+                ensure_token(home)
+        message = str(caught.exception)
+        command = "chmod 600 {}".format(shlex.quote(str(token_path)))
+        self.assertIn(command, message)
+        self.assertEqual(shlex.split(command), ["chmod", "600", str(token_path)])
 
 
 class ServerHeaderTest(unittest.TestCase):

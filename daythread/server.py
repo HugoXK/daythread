@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import ssl
 import threading
@@ -53,7 +54,7 @@ def _chmod_or_fail(path: Path, mode: int) -> None:
     try:
         os.chmod(str(path), mode)
     except OSError as exc:
-        command = "chmod {:o} {}".format(mode, path)
+        command = "chmod {:o} {}".format(mode, shlex.quote(str(path)))
         raise RuntimeError(
             "refusing to start: cannot set permissions {:04o} on {}: {}. "
             "Fix: {}".format(mode, path, exc, command)
