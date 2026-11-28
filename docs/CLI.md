@@ -33,11 +33,24 @@ Sensitive (`secret`/`health`) facts are hidden unless `--include-sensitive`.
 dt plan "<intent>" [--execute] [--file plan.json] [--taint untrusted]
 dt act <tool> --arg k=v [--taint untrusted]
 dt runs | show <id> | ledger <id> --verify
+dt receipt <id> [--json] [--out PATH]   # finished runs only; Markdown by default
 dt approve <id> | reject <id> | undo <id> | resume <id> | cancel <id>
 dt policy show | set <risk> <allow|ask|deny>
 ```
 
 `taint=untrusted` forces approval for every non-read step.
+
+`dt receipt` projects a *finished* run's ledger into one deterministic document
+(`version`, `run`, step `hash`/`payload_digest` rows, `chain_head`, `policy`,
+`undo`, and a `digest` over the canonical body). Markdown is the default for
+humans; `--json` emits the canonical machine form, and `--out PATH` writes the
+same bytes to a file. It is read-only: no table is written, no migration runs,
+and writing `--out` never changes run state. Unfinished runs (`pending_approval`,
+`running`, ...) and unknown ids exit non-zero instead of producing a partial
+receipt. The ledger remains authoritative: `dt ledger <id> --verify`.
+
+Undo recipes are redacted (`obs.redact()` sensitive keys) and ids of `secret` /
+`health` facts are dropped, so a receipt does not carry those references.
 
 `resume` refuses a failed run when a non-idempotent step may have partially
 executed (its idempotency state is `started` or `failed`). Verify the external
