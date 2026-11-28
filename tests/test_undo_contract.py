@@ -19,8 +19,7 @@ class FakeGoogleCalendar:
     def __init__(self):
         self.events = []
         self.calls = []
-        self.fail_delete = False
-        self.missing_delete = False
+        self.delete_status = None
 
     def __call__(self, request):
         method = request.get_method()
@@ -33,10 +32,10 @@ class FakeGoogleCalendar:
         if method == "PATCH":
             return json.dumps({"id": url.rsplit("/", 1)[-1]}).encode("utf-8")
         if method == "DELETE":
-            if self.missing_delete:
-                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
-            if self.fail_delete:
-                raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
+            if self.delete_status is not None:
+                raise urllib.error.HTTPError(
+                    url, self.delete_status, "request failed", None, None
+                )
             event_id = url.rsplit("/", 1)[-1]
             self.events = [item for item in self.events if item.get("id") != event_id]
             return b""
@@ -205,7 +204,7 @@ class UndoContractTest(unittest.TestCase):
     def test_undo_failure_marks_run_undo_failed_and_keeps_payload(self):
         run = self._create_event()
         before = get_steps(self.conn, run["id"])
-        self.opener.fail_delete = True
+        self.opener.delete_status = 403
         with self.assertRaises(ProviderError):
             runtime.undo_run(self.conn, self.home, run["id"])
         current = runtime.get_run(self.conn, run["id"])
@@ -244,11 +243,14 @@ class UndoContractTest(unittest.TestCase):
         self.assertEqual(self.opener.calls, [])
 
     def test_missing_remote_event_is_already_undone(self):
-        run = self._create_event()
-        self.opener.missing_delete = True
-        undone = runtime.undo_run(self.conn, self.home, run["id"])
-        self.assertEqual(undone["state"], "undone")
-        self.assertEqual(self.opener.deletes(), ["evt-1"])
+        for status in (404, 410):
+            with self.subTest(status=status):
+                self.opener.delete_status = status
+                run = self._create_event(title="Review {}".format(status))
+                undone = runtime.undo_run(self.conn, self.home, run["id"])
+                self.assertEqual(undone["state"], "undone")
+                self.assertEqual(self.opener.deletes()[-1], "evt-1")
+                self.opener.delete_status = None
 
     def test_connector_handler_without_metadata_is_refused(self):
         bad = connectors.ConnectorSpec(

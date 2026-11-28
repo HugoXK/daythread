@@ -81,6 +81,12 @@ manually: open the connected account's provider console (for example Google
 Calendar) with write access, find the event by its title and start time, delete
 it, then inspect `dt show <id>` / `dt ledger <id> --verify` and start a new run.
 
+`undo` is one-shot: if any undo step fails the run is left `undo_failed` with
+the original payloads and receipt intact, and further `dt undo` calls refuse it
+because only completed runs can be undone. Inspect `dt show <id>` /
+`dt ledger <id> --verify`, clean up the external object by hand if the provider
+call took effect, and start a new run instead of retrying in place.
+
 `resume` refuses a failed run when a non-idempotent step may have partially
 executed (its idempotency state is `started` or `failed`). Verify the external
 side effect first, inspect `dt show <id>` / `dt ledger <id> --verify`, and start
@@ -102,7 +108,10 @@ is `irreversible`: only actions that declare a per-action undo recipe (today
 and can be undone. Every other write action is marked irreversible in its step
 payload with a reason (visible as `irreversible_reason` in `dt show <id> --json`).
 A connector handler without an `actions` metadata entry fails closed at
-registration and again at call time, before the handler runs.
+registration and again at call time, before the handler runs. `provides_undo`
+is a registry declaration, not a runtime promise: if such a handler ever returns
+no recipe, `dt undo` refuses the run before executing any recipe and the receipt
+reports undo as unavailable.
 
 ## Proactivity, scheduler, webhooks
 
