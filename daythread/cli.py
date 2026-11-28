@@ -910,15 +910,25 @@ def _plan(args: argparse.Namespace, conn, home: Path) -> None:
 
 def _ledger(args: argparse.Namespace, conn) -> None:
     steps = get_steps(conn, args.run_id)
+    verify_errors = []
+    verify_failed = False
     if args.verify:
         ok, errors = verify_run(conn, args.run_id)
         if args.as_json:
             _print_json({"run_id": args.run_id, "ok": ok, "errors": errors, "steps": steps})
+            if not ok:
+                raise ValueError(
+                    "ledger verification failed: {}".format(
+                        "; ".join(errors[:3]) or "unknown error"
+                    )
+                )
             return
         print("ledger {}: {}".format("OK" if ok else "TAMPERED", args.run_id))
         for error in errors:
             print("  - {}".format(error))
         print("")
+        verify_errors = errors
+        verify_failed = not ok
     if args.as_json:
         _print_json(steps)
         return
@@ -931,6 +941,12 @@ def _ledger(args: argparse.Namespace, conn) -> None:
                 step["kind"],
                 step["hash"][:12],
                 json.dumps(step["payload"], ensure_ascii=False, sort_keys=True),
+            )
+        )
+    if verify_failed:
+        raise ValueError(
+            "ledger verification failed: {}".format(
+                "; ".join(verify_errors[:3]) or "unknown error"
             )
         )
 
