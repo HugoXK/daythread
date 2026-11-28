@@ -54,10 +54,13 @@ form is authoritative for tooling) and includes an `## Approvals` section with
 the real approver, decision and step time for runs that needed approval.
 
 Undo recipes keep only non-content fields (`kind`, `path`, `table`, `id`, `ids`,
-`target`): `previous`/`fields` never leave the ledger, so prior file or row
-content is not exported. Remaining values are redacted (`obs.redact()` sensitive
-keys) and ids of `secret` / `health` facts are dropped, so a receipt does not
-carry those references.
+`target`, and the `connector`/`action` identifiers needed to execute a connector
+recipe): `previous`/`fields` never leave the ledger, so prior file or row content
+is not exported. Remaining values are redacted (`obs.redact()` sensitive keys)
+and ids of `secret` / `health` facts are dropped, so a receipt does not carry
+those references. When undo is available the Markdown form ends with the exact
+`dt undo <id>` command; a run whose external writes are explicitly irreversible
+says so instead of showing an empty recipe list.
 
 `resume` refuses a failed run when a non-idempotent step may have partially
 executed (its idempotency state is `started` or `failed`). Verify the external

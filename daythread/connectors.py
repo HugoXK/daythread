@@ -270,7 +270,10 @@ def _http_json(
                     raw = response.read()
             if hasattr(raw, "read"):
                 raw = raw.read()
-            return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            if not text.strip():
+                return {}
+            return json.loads(text)
         except urllib.error.HTTPError as exc:
             last_error = exc
             if exc.code in (429, 500, 502, 503, 504) and attempt < HTTP_RETRIES - 1:
@@ -599,6 +602,20 @@ def _action_google_calendar_move(conn, home, token, args, opener=None):
     )
 
 
+def _action_google_calendar_delete(conn, home, token, args, opener=None):
+    event_id = str(args.get("event_id", "")).strip()
+    if not event_id:
+        raise ValidationError("event_id is required")
+    return _http_json(
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events/{}".format(
+            quote(event_id, safe="")
+        ),
+        token,
+        opener,
+        method="DELETE",
+    )
+
+
 def _action_google_gmail_draft(conn, home, token, args, opener=None):
     raw = _raw_email(args)
     return _http_json(
@@ -729,8 +746,18 @@ REGISTRY: Dict[str, ConnectorSpec] = {
         scopes=["https://www.googleapis.com/auth/calendar"],
         actions=[
             {"name": "list_events", "risk": "read"},
-            {"name": "create_event", "risk": "external"},
+            {
+                "name": "create_event",
+                "risk": "external",
+                "undo": {
+                    "action": "delete_event",
+                    "argument": "event_id",
+                    "result_field": "id",
+                    "verify": {"expect": "absent"},
+                },
+            },
             {"name": "move_event", "risk": "external"},
+            {"name": "delete_event", "risk": "external"},
         ],
         sync=_sync_google_calendar,
         description="Read and write primary Google Calendar events.",
@@ -738,6 +765,7 @@ REGISTRY: Dict[str, ConnectorSpec] = {
         action_handlers={
             "create_event": _action_google_calendar_create,
             "move_event": _action_google_calendar_move,
+            "delete_event": _action_google_calendar_delete,
         },
     ),
     "google.gmail": ConnectorSpec(
@@ -1072,6 +1100,98 @@ def revoke(conn: sqlite3.Connection, home: Optional[Any], connector_id: str) -> 
     return {"id": connector_id, "status": "disconnected"}
 
 
+def _action_metadata(spec: ConnectorSpec, action: str) -> Dict[str, Any]:
+    for item in spec.actions:
+        if isinstance(item, dict) and item.get("name") == action:
+            return item
+    return {}
+
+
+def _build_undo_recipe(
+    connector_id: str,
+    action: str,
+    declaration: Dict[str, Any],
+    result: Any,
+) -> Dict[str, Any]:
+    undo_action_name = str(declaration.get("action", "")).strip()
+    argument = str(declaration.get("argument", "")).strip()
+    if not undo_action_name or not argument:
+        raise ValidationError(
+            "connector {}.{} declares an undo recipe without action/argument".format(
+                connector_id, action
+            )
+        )
+    result_field = str(declaration.get("result_field", "id"))
+    target_id = result.get(result_field) if isinstance(result, dict) else None
+    if target_id is None or not str(target_id).strip():
+        raise ValidationError(
+            "connector {}.{} declares an undo recipe but returned no {}; refusing to "
+            "record a run without a usable undo target".format(
+                connector_id, action, result_field
+            )
+        )
+    verify = declaration.get("verify") or {"expect": "absent"}
+    if not isinstance(verify, dict):
+        raise ValidationError(
+            "connector {}.{} undo verify must be an object".format(connector_id, action)
+        )
+    return {
+        "kind": "connector.delete",
+        "connector": connector_id,
+        "action": undo_action_name,
+        "target": {argument: str(target_id)},
+        "verify": verify,
+    }
+
+
+def undo_action(
+    conn: sqlite3.Connection,
+    home: Optional[Any],
+    connector_id: str,
+    action: str,
+    target: Dict[str, Any],
+    opener: Optional[Callable[[urllib.request.Request], Any]] = None,
+) -> Dict[str, Any]:
+    """Run one declared connector undo against a single target id.
+
+    Undo is deliberately narrow: exactly one id, a declared action, never a
+    range. A missing remote resource (404/410) counts as already undone.
+    """
+    if not isinstance(target, dict) or len(target) != 1:
+        raise ValidationError("undo target must be exactly one id")
+    for key, value in target.items():
+        if not str(key).strip() or value is None or not str(value).strip():
+            raise ValidationError("undo target must be exactly one non-empty id")
+    spec = get_connector(connector_id)
+    meta = _action_metadata(spec, action)
+    if not meta:
+        raise ValidationError(
+            "unknown undo action {} for {}".format(action, connector_id)
+        )
+    if meta.get("risk") == "read":
+        raise ValidationError(
+            "refusing to undo with read action {} on {}".format(action, connector_id)
+        )
+    if action not in spec.action_handlers:
+        raise ValidationError(
+            "connector {}.{} has no handler".format(connector_id, action)
+        )
+    try:
+        return call_action(
+            conn, home, connector_id, action, dict(target), opener=opener
+        )
+    except ProviderError as exc:
+        message = str(exc)
+        if message.endswith("HTTP 404") or message.endswith("HTTP 410"):
+            return {
+                "connector": connector_id,
+                "action": action,
+                "result": {},
+                "absent": True,
+            }
+        raise
+
+
 def call_action(
     conn: sqlite3.Connection,
     home: Optional[Any],
@@ -1095,15 +1215,34 @@ def call_action(
         raise ValidationError("arguments must be an object")
     token = _get_token(conn, spec, home, opener, connector_id)
     result = handler(conn, home, token, arguments, opener)
+    meta = _action_metadata(spec, action)
+    undo = None
+    irreversible = False
+    irreversible_reason = ""
+    declaration = meta.get("undo") if isinstance(meta.get("undo"), dict) else None
+    if declaration:
+        undo = _build_undo_recipe(connector_id, action, declaration, result)
+    elif meta.get("risk") in ("external", "destructive"):
+        irreversible = True
+        irreversible_reason = "connector {}.{} has no declared undo recipe".format(
+            connector_id, action
+        )
     obs.incr(conn, "connector.actions")
     obs.audit(
         conn,
         "connector.action",
         actor="agent",
         target=connector_id,
-        detail={"action": action},
+        detail={"action": action, "reversible": undo is not None},
     )
-    return {"connector": connector_id, "action": action, "result": result}
+    return {
+        "connector": connector_id,
+        "action": action,
+        "result": result,
+        "undo": undo,
+        "irreversible": irreversible,
+        "irreversible_reason": irreversible_reason,
+    }
 
 
 def sync(
