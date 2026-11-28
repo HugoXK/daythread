@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from daythread import crypto
 from daythread.db import connect, init_db, set_setting
@@ -150,18 +151,27 @@ class ServerV3Test(unittest.TestCase):
         conn = connect(self.db_path)
         set_setting(conn, "api.rate_limit_per_minute", "1")
         conn.close()
-        self.assertEqual(self.request("GET", "/v1/version")[0], 200)
-        second = ApiServer(self.home, self.db_path, port=0).start()
-        try:
-            request = urllib.request.Request(
-                "http://127.0.0.1:{}/v1/version".format(second.port),
-                headers={"Authorization": "Bearer {}".format(second.token)},
-            )
-            with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(request, timeout=5)
-            self.assertEqual(ctx.exception.code, 429)
-        finally:
-            second.stop()
+
+        # The server buckets limits by wall-clock minute. Pin the clock so the
+        # two requests below cannot straddle a minute boundary, which would
+        # silently move the second request into a fresh bucket.
+        class FrozenClock:
+            def time(self):
+                return 1800000000.0
+
+        with mock.patch("daythread.server.time", FrozenClock()):
+            self.assertEqual(self.request("GET", "/v1/version")[0], 200)
+            second = ApiServer(self.home, self.db_path, port=0).start()
+            try:
+                request = urllib.request.Request(
+                    "http://127.0.0.1:{}/v1/version".format(second.port),
+                    headers={"Authorization": "Bearer {}".format(second.token)},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    urllib.request.urlopen(request, timeout=5)
+                self.assertEqual(ctx.exception.code, 429)
+            finally:
+                second.stop()
 
     @unittest.skipUnless(crypto.HAVE_CRYPTO, "cryptography is not installed")
     def test_https_server(self):
