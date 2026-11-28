@@ -153,12 +153,17 @@ def _first_non_empty_line(stripped: str) -> str:
     return ""
 
 
+def _verdict_line_sha(line: str) -> str | None:
+    match = re.search(r"[0-9a-fA-F]{40}", line)
+    return match.group(0) if match else None
+
+
 def bound_verdict(body: str, head: str, *, require_sha: bool) -> str | None:
     """First verdict with an optional full-head SHA binding.
 
-    A SHA right after the phrase must be the full 40-char head. A verdict with
-    no SHA is accepted only when ``require_sha`` is false and the verdict line
-    is the first non-empty line of the stripped body.
+    The first 40-hex run anywhere on the verdict line is the binding SHA; it
+    must equal ``head``. Only when the line has no 40-hex run does the adjacent
+    token (7-39 chars, invalid) or the path-specific no-SHA rule apply.
     """
     stripped = strip_noise(body)
     match = VERDICT_RE.search(stripped)
@@ -166,10 +171,10 @@ def bound_verdict(body: str, head: str, *, require_sha: bool) -> str | None:
         return None
     verdict = match.group(1).upper()
     line, after = _verdict_context(stripped, match)
-    sha = _sha_after(after)
-    if sha is not None:
-        if len(sha) == 40 and sha.lower() == head.lower():
-            return verdict
+    line_sha = _verdict_line_sha(line)
+    if line_sha is not None:
+        return verdict if line_sha.lower() == head.lower() else None
+    if _sha_after(after) is not None:
         return None
     if require_sha:
         return None

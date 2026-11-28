@@ -105,6 +105,55 @@ class ReviewGateTest(unittest.TestCase):
         with patch.object(review_gate, "api", fake):
             return review_gate.evaluate(pull(), "HugoXK-bot", False)
 
+    def _evaluate_review(self, body):
+        review = {
+            "user": {"login": "HugoXK-bot"},
+            "commit_id": HEAD,
+            "state": "COMMENTED",
+            "body": body,
+            "submitted_at": "2026-01-01T00:00:00Z",
+        }
+        fake = FakeApi(reviews=[review])
+        with patch.object(review_gate, "api", fake):
+            return review_gate.evaluate(pull(), "HugoXK-bot", False)
+
+    def test_issue_comment_markdown_wrapped_sha_binds(self):
+        ok, detail = self._evaluate_issue_comment(
+            "Verdict: PASS at **{}**".format(HEAD)
+        )
+        self.assertTrue(ok, detail)
+        ok, detail = self._evaluate_issue_comment(
+            "Verdict: PASS at **{}**".format("b" * 40)
+        )
+        self.assertFalse(ok, detail)
+
+    def test_commented_review_wrapped_sha_forms_bind(self):
+        old = "b" * 40
+        for template in (
+            "Verdict: PASS at **{}**",
+            "Verdict: PASS at ({})",
+            "Verdict: PASS — {}",
+            "Verdict: PASS sha {}",
+        ):
+            ok, detail = self._evaluate_review(template.format(old))
+            self.assertFalse(ok, detail)
+            ok, detail = self._evaluate_review(template.format(HEAD))
+            self.assertTrue(ok, detail)
+
+    def test_commit_comment_markdown_wrapped_old_sha_is_red(self):
+        fake = FakeApi(
+            commit_comments=[
+                {
+                    "user": {"login": "HugoXK-bot"},
+                    "body": "Verdict: PASS at **{}**".format("b" * 40),
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+        )
+        with patch.object(review_gate, "api", fake):
+            ok, detail = review_gate.evaluate(pull(), "HugoXK-bot", False)
+        self.assertFalse(ok, detail)
+
     def test_issue_comment_old_sha_with_new_head_in_prose_is_red(self):
         old = "b" * 40
         body = "head moved to {head}; my earlier verdict is superseded:\n\nVerdict: PASS at {old}".format(
